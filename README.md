@@ -39,26 +39,7 @@ Install it by copying the DLL to:
 
 Releases are tag-triggered. Push a tag matching `v*` to run `.github/workflows/release.yml`.
 
-Because this project must reference proprietary game and Unity assemblies, the GitHub workflow expects a repository secret named `CHILL_GAME_REFS_ZIP_BASE64`. It should be a base64-encoded zip containing this layout:
-
-```text
-BepInEx/core/BepInEx.dll
-BepInEx/core/0Harmony.dll
-Chill With You_Data/Managed/Assembly-CSharp.dll
-Chill With You_Data/Managed/Unity.TextMeshPro.dll
-Chill With You_Data/Managed/UnityEngine.dll
-Chill With You_Data/Managed/UnityEngine.CoreModule.dll
-Chill With You_Data/Managed/UnityEngine.IMGUIModule.dll
-Chill With You_Data/Managed/UnityEngine.InputLegacyModule.dll
-Chill With You_Data/Managed/UnityEngine.ParticleSystemModule.dll
-Chill With You_Data/Managed/UnityEngine.UnityWebRequestModule.dll
-Chill With You_Data/Managed/UnityEngine.AudioModule.dll
-Chill With You_Data/Managed/UnityEngine.UIModule.dll
-Chill With You_Data/Managed/UnityEngine.TextRenderingModule.dll
-Chill With You_Data/Managed/UnityEngine.UI.dll
-```
-
-Do not commit those DLLs to the public repository.
+The workflow downloads BepInEx 5 references from the official BepInEx GitHub release and uses public Unity reference packages, so no private game DLLs or GitHub secrets are required for release builds.
 
 ## License
 

@@ -21,16 +21,16 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore private game references
+      - name: Download BepInEx references
         shell: pwsh
         run: |
-          if (-not "${{ secrets.CHILL_GAME_REFS_ZIP_BASE64 }}") {
-            throw "Missing CHILL_GAME_REFS_ZIP_BASE64 secret. See README.md for expected zip layout."
-          }
-          $zipPath = Join-Path $env:RUNNER_TEMP "chill-game-refs.zip"
-          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String("${{ secrets.CHILL_GAME_REFS_ZIP_BASE64 }}"))
-          Expand-Archive -Path $zipPath -DestinationPath "$env:RUNNER_TEMP/chill-game" -Force
-          "CHILL_GAME_DIR=$env:RUNNER_TEMP/chill-game" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $version = "5.4.23.5"
+          $url = "https://github.com/BepInEx/BepInEx/releases/download/v$version/BepInEx_win_x64_$version.zip"
+          $zipPath = Join-Path $env:RUNNER_TEMP "bepinex.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "bepinex"
+          Invoke-WebRequest -Uri $url -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $dest -Force
+          "BEPINEX_ROOT_DIR=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build weather module
         run: dotnet build src/QualityOfChilling.Weather/QualityOfChilling.Weather.csproj -c Release

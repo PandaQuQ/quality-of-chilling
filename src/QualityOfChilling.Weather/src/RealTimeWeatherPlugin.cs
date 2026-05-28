@@ -11,9 +11,6 @@ using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
-using TMPro;
-using Bulbul;
 
 namespace RealTimeWeatherForChill;
 
@@ -48,7 +45,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     private WeatherSnapshot? lastWeather;
     private WeatherRuntime? runtime;
     private string status = "未刷新";
-    private string manualLocationBuffer = string.Empty;
     private bool fallbackRefreshStarted;
     private bool quitting;
     private float nextFallbackTickLogTime;
@@ -61,7 +57,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         weatherClient = new WeatherClient(weatherConfig);
         weatherApplier = new WeatherApplier(weatherConfig);
         nativeBridge = new NativeGameBridge(weatherConfig);
-        manualLocationBuffer = weatherConfig.ManualLocation.Value;
 
         LogPatchTargets();
         harmony = new Harmony(PluginGuid);
@@ -180,8 +175,8 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
 
     private void LogPatchTargets()
     {
-        Logger.LogInfo($"Patch 目标 FacilityEnvironment.Setup: {typeof(FacilityEnvironment).GetMethod("Setup", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null}");
-        Logger.LogInfo($"Patch 目标 CurrentDateAndTimeUI.UpdateDateAndTime: {typeof(CurrentDateAndTimeUI).GetMethod("UpdateDateAndTime", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null}");
+        Logger.LogInfo($"Patch 目标 FacilityEnvironment.Setup: {AccessTools.TypeByName("Bulbul.FacilityEnvironment")?.GetMethod("Setup", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null}");
+        Logger.LogInfo($"Patch 目标 CurrentDateAndTimeUI.UpdateDateAndTime: {AccessTools.TypeByName("Bulbul.CurrentDateAndTimeUI")?.GetMethod("UpdateDateAndTime", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null}");
     }
 
     internal void TriggerRefreshFromGameReady()
@@ -193,14 +188,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     internal void CaptureWindowViewService(object service)
     {
         nativeBridge.CaptureWindowViewService(service);
-    }
-
-    internal void DrawGui()
-    {
-    }
-
-    internal void EnsureOverlay()
-    {
     }
 
     internal IEnumerator RefreshLoop()
@@ -265,64 +252,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         return value.HasValue ? value.Value.ToString("yyyy-MM-dd HH:mm") : "fallback-solar-elevation";
     }
 
-    private void DrawWindow(int id)
-    {
-        GUILayout.Label($"状态：{status}");
-        GUILayout.Label(lastWeather == null ? "天气：无" : $"天气：{lastWeather.Text} ({lastWeather.Kind})");
-
-        var enabled = GUILayout.Toggle(weatherConfig.Enabled.Value, "启用实时天气");
-        if (enabled != weatherConfig.Enabled.Value)
-        {
-            weatherConfig.Enabled.Value = enabled;
-            Config.Save();
-        }
-
-        var autoLocation = GUILayout.Toggle(weatherConfig.AutoIpLocation.Value, "自动 IP 定位");
-        if (autoLocation != weatherConfig.AutoIpLocation.Value)
-        {
-            weatherConfig.AutoIpLocation.Value = autoLocation;
-            Config.Save();
-        }
-
-        GUILayout.Label("手动城市/位置（关闭自动定位时使用）：");
-        manualLocationBuffer = GUILayout.TextField(manualLocationBuffer, 64);
-        if (GUILayout.Button("保存手动位置"))
-        {
-            weatherConfig.ManualLocation.Value = manualLocationBuffer.Trim();
-            Config.Save();
-        }
-
-        GUILayout.Label($"刷新间隔：{weatherConfig.RefreshMinutes.Value} 分钟");
-        var refresh = Mathf.RoundToInt(GUILayout.HorizontalSlider(weatherConfig.RefreshMinutes.Value, 1, 180));
-        if (refresh != weatherConfig.RefreshMinutes.Value)
-        {
-            weatherConfig.RefreshMinutes.Value = refresh;
-            Config.Save();
-        }
-
-        GUILayout.Label($"效果强度：{weatherConfig.IntensityScale.Value:0.00}");
-        var intensity = GUILayout.HorizontalSlider(weatherConfig.IntensityScale.Value, 0f, 2f);
-        if (Math.Abs(intensity - weatherConfig.IntensityScale.Value) > 0.01f)
-        {
-            weatherConfig.IntensityScale.Value = intensity;
-            Config.Save();
-        }
-
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button("立即刷新"))
-        {
-            StartCoroutine(RefreshWeather());
-        }
-
-        if (GUILayout.Button("重新绑定场景"))
-        {
-            weatherApplier.RebindSceneObjects();
-        }
-        GUILayout.EndHorizontal();
-
-        GUILayout.Label("说明：天气使用无需 Key 的公共 API。自动 IP 定位会访问 ipwho.is；天气和城市搜索会访问 Open-Meteo。", GUILayout.ExpandHeight(true));
-        GUI.DragWindow();
-    }
 }
 
 internal sealed class WeatherRuntime : MonoBehaviour
@@ -355,7 +284,6 @@ internal sealed class WeatherRuntime : MonoBehaviour
     private IEnumerator StartAfterFirstFrame()
     {
         yield return null;
-        plugin?.EnsureOverlay();
         if (plugin != null)
         {
             StartCoroutine(plugin.RefreshLoop());
@@ -365,11 +293,6 @@ internal sealed class WeatherRuntime : MonoBehaviour
     private void Update()
     {
         plugin?.Tick();
-    }
-
-    private void OnGUI()
-    {
-        plugin?.DrawGui();
     }
 }
 
@@ -383,8 +306,6 @@ internal sealed class WeatherConfig
     internal ConfigEntry<float> IntensityScale { get; }
     internal ConfigEntry<bool> InjectNativeDateTimeUI { get; }
     internal ConfigEntry<bool> UseNativeWindowWeather { get; }
-    internal ConfigEntry<bool> ShowDebugWindow { get; }
-    internal ConfigEntry<KeyboardShortcut> ToggleWindowKey { get; }
 
     internal WeatherConfig(ConfigFile config)
     {
@@ -396,8 +317,6 @@ internal sealed class WeatherConfig
         IntensityScale = config.Bind("Effects", "IntensityScale", 1f, new ConfigDescription("fallback 天气效果强度倍率。", new AcceptableValueRange<float>(0f, 2f)));
         InjectNativeDateTimeUI = config.Bind("Native", "InjectNativeDateTimeUI", true, "把天气信息追加到游戏现有日期/时间 UI。参考 RealTimeWeatherMod 的 UI 注入方式。");
         UseNativeWindowWeather = config.Bind("Native", "UseNativeWindowWeather", true, "尝试调用游戏原生 WindowViewService.ChangeWeatherAndTime 切换窗口天气/时间。");
-        ShowDebugWindow = config.Bind("Debug", "ShowDebugWindow", false, "显示 F8 可切换的调试设置窗口。默认关闭，主要用游戏原生 UI 显示天气。 ");
-        ToggleWindowKey = config.Bind("Debug", "ToggleWindowKey", new KeyboardShortcut(KeyCode.F8), "切换实时天气调试窗口的快捷键。");
     }
 }
 
@@ -829,17 +748,10 @@ internal static class PublicApiParser
 internal sealed class NativeGameBridge
 {
     private readonly WeatherConfig config;
-    private readonly List<Text> dateTimeTexts = new();
-    private readonly List<TMP_Text> dateTimeTmpTexts = new();
-    private readonly Dictionary<Text, string> originalTexts = new();
-    private readonly Dictionary<TMP_Text, string> originalTmpTexts = new();
-    private bool loggedMissingUi;
     private bool loggedMissingService;
     private object? windowViewService;
     private MethodInfo? changeWeatherAndTimeMethod;
     private float nextScanTime;
-    private float nextUiUpdateTime;
-    private bool loggedFirstUiInjection;
     private string? lastAppliedEnvironmentKey;
 
     internal NativeGameBridge(WeatherConfig config)
@@ -860,10 +772,6 @@ internal sealed class NativeGameBridge
             ScanNativeObjects();
         }
 
-        if (weather != null && Time.unscaledTime >= nextUiUpdateTime)
-        {
-            nextUiUpdateTime = Time.unscaledTime + 1f;
-        }
     }
 
     internal void CaptureWindowViewService(object service)
@@ -920,18 +828,11 @@ internal sealed class NativeGameBridge
     {
         nextScanTime = Time.unscaledTime + 10f;
         ScanWindowViewService();
-        ScanDateTimeTexts();
 
         if (!loggedMissingService && windowViewService == null)
         {
             loggedMissingService = true;
             RealTimeWeatherPlugin.Log.LogInfo("尚未在当前场景找到 Bulbul.WindowViewService，会继续扫描。");
-        }
-
-        if (!loggedMissingUi && dateTimeTexts.Count == 0 && dateTimeTmpTexts.Count == 0)
-        {
-            loggedMissingUi = true;
-            RealTimeWeatherPlugin.Log.LogInfo("尚未在当前场景找到日期时间 UI 文本，会继续扫描。若一直没有，建议使用 UnityExplorer MCP 查看实际 UI 对象。");
         }
     }
 
@@ -965,146 +866,6 @@ internal sealed class NativeGameBridge
             changeWeatherAndTimeMethod = method;
             RealTimeWeatherPlugin.Log.LogInfo("已绑定原生 Bulbul.WindowViewService.ChangeWeatherAndTime。");
             return;
-        }
-    }
-
-    private void ScanDateTimeTexts()
-    {
-        if (!config.InjectNativeDateTimeUI.Value)
-        {
-            return;
-        }
-
-        foreach (var component in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
-        {
-            if (component == null || component.GetType().FullName != "Bulbul.CurrentDateAndTimeUI")
-            {
-                continue;
-            }
-
-            foreach (var text in component.GetComponentsInChildren<Text>(true))
-            {
-                if (IsDateText(text.transform))
-                {
-                    AddDateTimeText(text);
-                }
-            }
-
-            foreach (var text in component.GetComponentsInChildren<TMP_Text>(true))
-            {
-                if (IsDateText(text.transform))
-                {
-                    AddDateTimeText(text);
-                }
-            }
-        }
-
-        if (dateTimeTexts.Count == 0 && dateTimeTmpTexts.Count == 0)
-        {
-            foreach (var text in Resources.FindObjectsOfTypeAll<Text>())
-            {
-                if (!IsSceneObject(text.gameObject))
-                {
-                    continue;
-                }
-
-                if (IsDateText(text.transform))
-                {
-                    AddDateTimeText(text);
-                }
-            }
-
-            foreach (var text in Resources.FindObjectsOfTypeAll<TMP_Text>())
-            {
-                if (!IsSceneObject(text.gameObject))
-                {
-                    continue;
-                }
-
-                if (IsDateText(text.transform))
-                {
-                    AddDateTimeText(text);
-                }
-            }
-        }
-    }
-
-    private void AddDateTimeText(Text text)
-    {
-        if (dateTimeTexts.Contains(text))
-        {
-            return;
-        }
-
-        dateTimeTexts.Add(text);
-        originalTexts[text] = StripWeatherSuffix(text.text);
-        RealTimeWeatherPlugin.Log.LogInfo($"已绑定原生日期时间 UI(Text)：{GetPath(text.transform)}");
-    }
-
-    private void AddDateTimeText(TMP_Text text)
-    {
-        if (dateTimeTmpTexts.Contains(text))
-        {
-            return;
-        }
-
-        dateTimeTmpTexts.Add(text);
-        originalTmpTexts[text] = StripWeatherSuffix(text.text);
-        RealTimeWeatherPlugin.Log.LogInfo($"已绑定原生日期时间 UI(TMP)：{GetPath(text.transform)}");
-    }
-
-    private void InjectWeatherText(WeatherSnapshot weather)
-    {
-        if (!config.InjectNativeDateTimeUI.Value || (dateTimeTexts.Count == 0 && dateTimeTmpTexts.Count == 0))
-        {
-            return;
-        }
-
-        nextUiUpdateTime = Time.unscaledTime + 1f;
-        var suffix = $" | {weather.Text} {weather.TemperatureCelsius}°C";
-        var injectedCount = 0;
-        for (var i = dateTimeTexts.Count - 1; i >= 0; i--)
-        {
-            var text = dateTimeTexts[i];
-            if (text == null)
-            {
-                dateTimeTexts.RemoveAt(i);
-                continue;
-            }
-
-            var baseText = StripWeatherSuffix(text.text);
-            if (!originalTexts.ContainsKey(text) || !string.IsNullOrWhiteSpace(baseText))
-            {
-                originalTexts[text] = baseText;
-            }
-
-            text.text = originalTexts[text] + suffix;
-            injectedCount++;
-        }
-
-        for (var i = dateTimeTmpTexts.Count - 1; i >= 0; i--)
-        {
-            var text = dateTimeTmpTexts[i];
-            if (text == null)
-            {
-                dateTimeTmpTexts.RemoveAt(i);
-                continue;
-            }
-
-            var baseText = StripWeatherSuffix(text.text);
-            if (!originalTmpTexts.ContainsKey(text) || !string.IsNullOrWhiteSpace(baseText))
-            {
-                originalTmpTexts[text] = baseText;
-            }
-
-            text.text = originalTmpTexts[text] + suffix;
-            injectedCount++;
-        }
-
-        if (!loggedFirstUiInjection && injectedCount > 0)
-        {
-            loggedFirstUiInjection = true;
-            RealTimeWeatherPlugin.Log.LogInfo($"已向 {injectedCount} 个日期时间 UI 文本写入天气：{suffix}");
         }
     }
 
@@ -1189,12 +950,6 @@ internal sealed class NativeGameBridge
 
         var lineIndex = value.IndexOf("\n", StringComparison.Ordinal);
         return lineIndex >= 0 ? value.Substring(0, lineIndex) : value;
-    }
-
-    private static bool IsDateText(Transform transform)
-    {
-        return transform.name.Equals("DateText", StringComparison.OrdinalIgnoreCase)
-            || GetPath(transform).EndsWith("/DateText", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSceneObject(GameObject gameObject)
@@ -1374,7 +1129,7 @@ internal static class SettingsMenuPatches
     [HarmonyPatch(typeof(GameObject), nameof(GameObject.SetActive))]
     private static void GameObjectSetActivePostfix(GameObject __instance, bool value)
     {
-        if (!value || RealTimeWeatherPlugin.Instance == null)
+        if (!value || ReferenceEquals(RealTimeWeatherPlugin.Instance, null))
         {
             return;
         }
@@ -1383,7 +1138,7 @@ internal static class SettingsMenuPatches
         if ((name.Contains("setting") || name.Contains("option") || name.Contains("general") || name.Contains("设置") || name.Contains("常规")) && Time.unscaledTime - lastLogTime > 5f)
         {
             lastLogTime = Time.unscaledTime;
-            RealTimeWeatherPlugin.Log.LogInfo($"检测到可能的设置菜单对象：{GetPath(__instance.transform)}。当前版本使用 F8 调试窗口调整实时天气参数。");
+            RealTimeWeatherPlugin.Log.LogInfo($"检测到可能的设置菜单对象：{GetPath(__instance.transform)}。当前版本通过 BepInEx 配置调整实时天气参数。");
         }
     }
 

@@ -1,27 +1,33 @@
 using System;
 using System.Reflection;
 using HarmonyLib;
-using Bulbul;
-using TMPro;
 
 namespace RealTimeWeatherForChill;
 
-[HarmonyPatch(typeof(FacilityEnvironment), "Setup")]
+[HarmonyPatch]
 internal static class FacilityEnvironmentSetupPatch
 {
-    private static void Postfix(FacilityEnvironment __instance)
+    private static MethodBase? TargetMethod()
+    {
+        return AccessTools.TypeByName("Bulbul.FacilityEnvironment")
+            ?.GetMethod("Setup", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    }
+
+    private static void Postfix(object __instance)
     {
         try
         {
-            var field = typeof(FacilityEnvironment).GetField("_windowViewService", BindingFlags.Instance | BindingFlags.NonPublic);
+            var field = __instance.GetType().GetField("_windowViewService", BindingFlags.Instance | BindingFlags.NonPublic);
             var service = field?.GetValue(__instance);
-            if (service != null)
+            if (service == null)
             {
-                var plugin = RealTimeWeatherPlugin.Instance;
-                if (!ReferenceEquals(plugin, null))
-                {
-                    plugin.CaptureWindowViewService(service);
-                }
+                return;
+            }
+
+            var plugin = RealTimeWeatherPlugin.Instance;
+            if (!ReferenceEquals(plugin, null))
+            {
+                plugin.CaptureWindowViewService(service);
             }
         }
         catch (Exception ex)
@@ -31,13 +37,19 @@ internal static class FacilityEnvironmentSetupPatch
     }
 }
 
-[HarmonyPatch(typeof(CurrentDateAndTimeUI), "UpdateDateAndTime")]
+[HarmonyPatch]
 internal static class CurrentDateAndTimeUiPatch
 {
     private static bool triggeredFirstRefresh;
     private static bool loggedFirstInjection;
 
-    private static void Postfix(CurrentDateAndTimeUI __instance)
+    private static MethodBase? TargetMethod()
+    {
+        return AccessTools.TypeByName("Bulbul.CurrentDateAndTimeUI")
+            ?.GetMethod("UpdateDateAndTime", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    }
+
+    private static void Postfix(object __instance)
     {
         var plugin = RealTimeWeatherPlugin.Instance;
         if (!triggeredFirstRefresh && !ReferenceEquals(plugin, null))
@@ -55,10 +67,12 @@ internal static class CurrentDateAndTimeUiPatch
 
         try
         {
-            var field = typeof(CurrentDateAndTimeUI).GetField("_dateText", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (field?.GetValue(__instance) is TextMeshProUGUI text && !text.text.Contains(weatherText))
+            var field = __instance.GetType().GetField("_dateText", BindingFlags.Instance | BindingFlags.NonPublic);
+            var textObject = field?.GetValue(__instance);
+            var textProperty = textObject?.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
+            if (textProperty?.GetValue(textObject) is string currentText && !currentText.Contains(weatherText))
             {
-                text.text = StripExistingWeather(text.text) + " | " + weatherText;
+                textProperty.SetValue(textObject, StripExistingWeather(currentText) + " | " + weatherText);
                 if (!loggedFirstInjection)
                 {
                     loggedFirstInjection = true;
