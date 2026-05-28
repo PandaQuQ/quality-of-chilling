@@ -215,13 +215,21 @@ internal static class SettingUiInjector
         };
 
         var interactableUiType = AccessTools.TypeByName("Bulbul.InteractableUI");
-        var enableButtons = weatherRow.GetComponentsInChildren(interactableUiType, true);
+        Component? btnOn = weatherRow.transform.Find(vsyncAct.name)?.GetComponent(interactableUiType);
+        Component? btnOff = weatherRow.transform.Find(vsyncDeact.name)?.GetComponent(interactableUiType);
 
-        if (enableButtons != null && enableButtons.Length >= 2)
+        if (btnOn == null || btnOff == null)
         {
-            var btnOn = enableButtons[0];
-            var btnOff = enableButtons[1];
+            var enableButtons = weatherRow.GetComponentsInChildren(interactableUiType, true);
+            if (enableButtons != null && enableButtons.Length >= 2)
+            {
+                btnOn = enableButtons[0];
+                btnOff = enableButtons[1];
+            }
+        }
 
+        if (btnOn != null && btnOff != null)
+        {
             SetRowLabel(weatherRow, labelText, btnOn, btnOff);
 
             var setupMethod = interactableUiType.GetMethod("Setup", new Type[] { typeof(Action) });
@@ -283,14 +291,22 @@ internal static class SettingUiInjector
             _ => "Auto IP Location"
         };
 
-        var autoLocButtons = autoLocRow.GetComponentsInChildren(interactableUiType, true);
+        Component? autoLocBtnOn = autoLocRow.transform.Find(vsyncAct.name)?.GetComponent(interactableUiType);
+        Component? autoLocBtnOff = autoLocRow.transform.Find(vsyncDeact.name)?.GetComponent(interactableUiType);
 
-        if (autoLocButtons != null && autoLocButtons.Length >= 2)
+        if (autoLocBtnOn == null || autoLocBtnOff == null)
         {
-            var btnOn = autoLocButtons[0];
-            var btnOff = autoLocButtons[1];
+            var autoLocButtons = autoLocRow.GetComponentsInChildren(interactableUiType, true);
+            if (autoLocButtons != null && autoLocButtons.Length >= 2)
+            {
+                autoLocBtnOn = autoLocButtons[0];
+                autoLocBtnOff = autoLocButtons[1];
+            }
+        }
 
-            SetRowLabel(autoLocRow, autoLocLabel, btnOn, btnOff);
+        if (autoLocBtnOn != null && autoLocBtnOff != null)
+        {
+            SetRowLabel(autoLocRow, autoLocLabel, autoLocBtnOn, autoLocBtnOff);
 
             var setupMethod = interactableUiType.GetMethod("Setup", new Type[] { typeof(Action) });
 
@@ -303,8 +319,8 @@ internal static class SettingUiInjector
                     config.Bind("Location", "AutoIpLocation", false).Value = true;
                     config.Save();
                 }
-                SetIsUsing(btnOn, true);
-                SetIsUsing(btnOff, false);
+                SetIsUsing(autoLocBtnOn, true);
+                SetIsUsing(autoLocBtnOff, false);
                 RealTimeWeatherPlugin.Instance?.TriggerRefreshFromGameReady();
             };
 
@@ -317,18 +333,18 @@ internal static class SettingUiInjector
                     config.Bind("Location", "AutoIpLocation", false).Value = false;
                     config.Save();
                 }
-                SetIsUsing(btnOn, false);
-                SetIsUsing(btnOff, true);
+                SetIsUsing(autoLocBtnOn, false);
+                SetIsUsing(autoLocBtnOff, true);
                 RealTimeWeatherPlugin.Instance?.TriggerRefreshFromGameReady();
             };
 
-            setupMethod?.Invoke(btnOn, new object[] { onAct });
-            setupMethod?.Invoke(btnOff, new object[] { onDeact });
+            setupMethod?.Invoke(autoLocBtnOn, new object[] { onAct });
+            setupMethod?.Invoke(autoLocBtnOff, new object[] { onDeact });
 
             var config = RealTimeWeatherPlugin.Instance?.Config;
             bool isAutoIp = config != null && config.Bind("Location", "AutoIpLocation", false).Value;
-            SetIsUsing(btnOn, isAutoIp);
-            SetIsUsing(btnOff, !isAutoIp);
+            SetIsUsing(autoLocBtnOn, isAutoIp);
+            SetIsUsing(autoLocBtnOff, !isAutoIp);
         }
         else
         {
