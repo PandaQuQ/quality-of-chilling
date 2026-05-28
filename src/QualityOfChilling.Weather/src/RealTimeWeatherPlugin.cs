@@ -33,6 +33,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     internal static RealTimeWeatherPlugin? Instance { get; private set; }
     internal static string CurrentUiWeatherString { get; private set; } = string.Empty;
     internal static ManualLogSource Log { get; private set; } = null!;
+    internal static GameLanguage CurrentLanguage => GameLanguageProvider.CurrentLanguage;
     private static readonly string DebugLogPath = Path.Combine(Paths.BepInExRootPath, "RealTimeWeatherForChill.debug.log");
 
     private Harmony? harmony;
@@ -41,7 +42,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     private WeatherApplier weatherApplier = null!;
     private NativeGameBridge nativeBridge = null!;
     internal WeatherSnapshot? LastWeather => lastWeather;
-    internal string UiWeatherString => lastWeather == null ? string.Empty : $"{lastWeather.Text} {lastWeather.TemperatureCelsius}°C";
+    internal string UiWeatherString => lastWeather == null ? string.Empty : $"{WeatherLocalizer.WeatherText(lastWeather.Code, CurrentLanguage)} {lastWeather.TemperatureCelsius}°C";
     private WeatherSnapshot? lastWeather;
     private WeatherRuntime? runtime;
     private string status = "未刷新";
@@ -100,6 +101,12 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
 
     internal void Tick()
     {
+        GameLanguageProvider.Tick();
+        if (lastWeather != null)
+        {
+            CurrentUiWeatherString = UiWeatherString;
+        }
+
         nativeBridge.Tick(lastWeather);
         weatherApplier.Apply(lastWeather);
     }
@@ -234,7 +241,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         {
             lastWeather = result.Weather;
             CurrentUiWeatherString = UiWeatherString;
-            status = $"{lastWeather.Location} / {lastWeather.Text} / {lastWeather.TemperatureCelsius}°C";
+            status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
             nativeBridge.ApplyWeather(lastWeather);
             weatherApplier.RebindSceneObjects();
             Logger.LogInfo($"天气已更新：{status}");
@@ -508,6 +515,212 @@ internal enum WeatherKind
     Unknown
 }
 
+internal enum GameLanguage
+{
+    Japanese,
+    English,
+    ChineseSimplified,
+    ChineseTraditional,
+    Portuguese,
+    Korean,
+    Russian
+}
+
+internal static class GameLanguageProvider
+{
+    private static object? languageSupplier;
+    private static PropertyInfo? languageProperty;
+    private static float nextScanTime;
+
+    internal static GameLanguage CurrentLanguage { get; private set; } = GameLanguage.English;
+
+    internal static void Tick()
+    {
+        if (Time.unscaledTime < nextScanTime)
+        {
+            return;
+        }
+
+        nextScanTime = Time.unscaledTime + 2f;
+        if (languageSupplier == null || languageProperty == null)
+        {
+            ScanLanguageSupplier();
+        }
+
+        var value = languageProperty?.GetValue(languageSupplier)?.ToString();
+        if (!string.IsNullOrEmpty(value) && Enum.TryParse<GameLanguage>(value, out var language))
+        {
+            CurrentLanguage = language;
+        }
+    }
+
+    private static void ScanLanguageSupplier()
+    {
+        foreach (var component in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+        {
+            if (component == null || component.GetType().FullName != "Bulbul.LanguageSupplier")
+            {
+                continue;
+            }
+
+            languageSupplier = component;
+            languageProperty = component.GetType().GetProperty("Language", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            RealTimeWeatherPlugin.Log.LogInfo("已绑定游戏语言供应器 Bulbul.LanguageSupplier。");
+            return;
+        }
+    }
+}
+
+internal static class WeatherLocalizer
+{
+    internal static string WeatherText(int code, GameLanguage language)
+    {
+        return language switch
+        {
+            GameLanguage.Japanese => WeatherTextJa(code),
+            GameLanguage.ChineseSimplified => WeatherTextZhHans(code),
+            GameLanguage.ChineseTraditional => WeatherTextZhHant(code),
+            GameLanguage.Portuguese => WeatherTextPt(code),
+            GameLanguage.Korean => WeatherTextKo(code),
+            GameLanguage.Russian => WeatherTextRu(code),
+            _ => WeatherTextEn(code)
+        };
+    }
+
+    private static string WeatherTextEn(int code) => code switch
+    {
+        0 => "Clear",
+        1 => "Mostly clear",
+        2 => "Partly cloudy",
+        3 => "Cloudy",
+        45 or 48 => "Fog",
+        51 or 53 or 55 => "Drizzle",
+        56 or 57 => "Freezing drizzle",
+        61 or 63 or 65 => "Rain",
+        66 or 67 => "Freezing rain",
+        71 or 73 or 75 => "Snow",
+        77 => "Snow grains",
+        80 or 81 or 82 => "Showers",
+        85 or 86 => "Snow showers",
+        95 or 96 or 99 => "Thunderstorm",
+        _ => "Unknown"
+    };
+
+    private static string WeatherTextZhHans(int code) => code switch
+    {
+        0 => "晴",
+        1 => "大部晴朗",
+        2 => "多云",
+        3 => "阴",
+        45 or 48 => "雾",
+        51 or 53 or 55 => "毛毛雨",
+        56 or 57 => "冻毛毛雨",
+        61 or 63 or 65 => "雨",
+        66 or 67 => "冻雨",
+        71 or 73 or 75 => "雪",
+        77 => "雪粒",
+        80 or 81 or 82 => "阵雨",
+        85 or 86 => "阵雪",
+        95 or 96 or 99 => "雷暴",
+        _ => "未知"
+    };
+
+    private static string WeatherTextZhHant(int code) => code switch
+    {
+        0 => "晴",
+        1 => "大致晴朗",
+        2 => "多雲",
+        3 => "陰",
+        45 or 48 => "霧",
+        51 or 53 or 55 => "毛毛雨",
+        56 or 57 => "凍毛毛雨",
+        61 or 63 or 65 => "雨",
+        66 or 67 => "凍雨",
+        71 or 73 or 75 => "雪",
+        77 => "雪粒",
+        80 or 81 or 82 => "陣雨",
+        85 or 86 => "陣雪",
+        95 or 96 or 99 => "雷暴",
+        _ => "未知"
+    };
+
+    private static string WeatherTextJa(int code) => code switch
+    {
+        0 => "晴れ",
+        1 => "ほぼ晴れ",
+        2 => "一部曇り",
+        3 => "曇り",
+        45 or 48 => "霧",
+        51 or 53 or 55 => "霧雨",
+        56 or 57 => "着氷性霧雨",
+        61 or 63 or 65 => "雨",
+        66 or 67 => "着氷性雨",
+        71 or 73 or 75 => "雪",
+        77 => "細雪",
+        80 or 81 or 82 => "にわか雨",
+        85 or 86 => "にわか雪",
+        95 or 96 or 99 => "雷雨",
+        _ => "不明"
+    };
+
+    private static string WeatherTextPt(int code) => code switch
+    {
+        0 => "Céu limpo",
+        1 => "Predom. limpo",
+        2 => "Parcialmente nublado",
+        3 => "Nublado",
+        45 or 48 => "Nevoeiro",
+        51 or 53 or 55 => "Chuvisco",
+        56 or 57 => "Chuvisco congelante",
+        61 or 63 or 65 => "Chuva",
+        66 or 67 => "Chuva congelante",
+        71 or 73 or 75 => "Neve",
+        77 => "Grãos de neve",
+        80 or 81 or 82 => "Aguaceiros",
+        85 or 86 => "Aguaceiros de neve",
+        95 or 96 or 99 => "Trovoada",
+        _ => "Desconhecido"
+    };
+
+    private static string WeatherTextKo(int code) => code switch
+    {
+        0 => "맑음",
+        1 => "대체로 맑음",
+        2 => "구름 조금",
+        3 => "흐림",
+        45 or 48 => "안개",
+        51 or 53 or 55 => "이슬비",
+        56 or 57 => "어는 이슬비",
+        61 or 63 or 65 => "비",
+        66 or 67 => "어는 비",
+        71 or 73 or 75 => "눈",
+        77 => "싸락눈",
+        80 or 81 or 82 => "소나기",
+        85 or 86 => "소낙눈",
+        95 or 96 or 99 => "뇌우",
+        _ => "알 수 없음"
+    };
+
+    private static string WeatherTextRu(int code) => code switch
+    {
+        0 => "Ясно",
+        1 => "Преим. ясно",
+        2 => "Переменная облачность",
+        3 => "Облачно",
+        45 or 48 => "Туман",
+        51 or 53 or 55 => "Морось",
+        56 or 57 => "Ледяная морось",
+        61 or 63 or 65 => "Дождь",
+        66 or 67 => "Ледяной дождь",
+        71 or 73 or 75 => "Снег",
+        77 => "Снежные зерна",
+        80 or 81 or 82 => "Ливни",
+        85 or 86 => "Снежные ливни",
+        95 or 96 or 99 => "Гроза",
+        _ => "Неизвестно"
+    };
+}
+
 internal static class SolarPhaseClassifier
 {
     internal static SolarPhase Classify(DateTime localTime, DateTime sunriseTime, DateTime sunsetTime)
@@ -692,7 +905,7 @@ internal static class PublicApiParser
             var daily = root?.GetDict("daily");
             var sunrise = ParseFirstDailyTime(daily, "sunrise");
             var sunset = ParseFirstDailyTime(daily, "sunset");
-            return new WeatherSnapshot(point.Name, OpenMeteoWeatherText(code), code, temperature, point.Latitude, point.Longitude, localTime, sunrise, sunset);
+            return new WeatherSnapshot(point.Name, WeatherLocalizer.WeatherText(code, GameLanguage.English), code, temperature, point.Latitude, point.Longitude, localTime, sunrise, sunset);
         }
         catch (Exception ex)
         {
@@ -720,28 +933,6 @@ internal static class PublicApiParser
         return DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed)
             ? parsed
             : null;
-    }
-
-    private static string OpenMeteoWeatherText(int code)
-    {
-        return code switch
-        {
-            0 => "晴",
-            1 => "大部晴朗",
-            2 => "多云",
-            3 => "阴",
-            45 or 48 => "雾",
-            51 or 53 or 55 => "毛毛雨",
-            56 or 57 => "冻毛毛雨",
-            61 or 63 or 65 => "雨",
-            66 or 67 => "冻雨",
-            71 or 73 or 75 => "雪",
-            77 => "雪粒",
-            80 or 81 or 82 => "阵雨",
-            85 or 86 => "阵雪",
-            95 or 96 or 99 => "雷暴",
-            _ => "未知天气"
-        };
     }
 }
 
@@ -808,7 +999,7 @@ internal sealed class NativeGameBridge
             {
                 changeWeatherAndTimeMethod.Invoke(windowViewService, new object[] { candidate });
                 lastAppliedEnvironmentKey = environmentKey;
-                RealTimeWeatherPlugin.Log.LogInfo($"已调用原生 ChangeWeatherAndTime：{candidate} ({weather.Text}, {weather.SolarPhase})");
+                RealTimeWeatherPlugin.Log.LogInfo($"已调用原生 ChangeWeatherAndTime：{candidate} ({WeatherLocalizer.WeatherText(weather.Code, RealTimeWeatherPlugin.CurrentLanguage)}, {weather.SolarPhase})");
                 return;
             }
             catch (TargetInvocationException ex)
