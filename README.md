@@ -1,7 +1,7 @@
 # Quality of Chilling
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.7.2-blueviolet.svg)](https://dotnet.microsoft.com/en-us/download/dotnet-framework/net472)
+[![.NET Standard 2.1](https://img.shields.io/badge/.NET%20Standard-2.1-blueviolet.svg)](https://learn.microsoft.com/en-us/dotnet/standard/net-standard)
 [![BepInEx](https://img.shields.io/badge/BepInEx-5-orange.svg)](https://github.com/BepInEx/BepInEx)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Co--Authored-brown.svg?logo=anthropic)](https://github.com/anthropics/claude-code)
 [![Antigravity CLI](https://img.shields.io/badge/Antigravity%20CLI-Co--Authored-blue?logo=google&logoColor=white)](https://github.com/google/antigravity)
