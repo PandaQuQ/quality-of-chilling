@@ -47,8 +47,17 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     private WeatherRuntime? runtime;
     private string status = "未刷新";
     private bool fallbackRefreshStarted;
+    private bool refreshInProgress;
     private bool quitting;
     private float nextFallbackTickLogTime;
+    private float nextAllowedRefreshTime;
+
+    // Cache fields
+    private static readonly string CacheFilePath = Path.Combine(Paths.ConfigPath, "panda.chillwithyou.realtimeweather.cache.json");
+    private Dictionary<string, object>? cachedForecastRoot;
+    private GeoPoint? cachedPoint;
+    private DateTime? cachedFetchedAtUtc;
+    private float nextCacheUpdateTime;
 
     private void Awake()
     {
@@ -58,6 +67,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         weatherClient = new WeatherClient(weatherConfig);
         weatherApplier = new WeatherApplier(weatherConfig);
         nativeBridge = new NativeGameBridge(weatherConfig);
+        RestoreCachedWeather();
 
         LogPatchTargets();
         harmony = new Harmony(PluginGuid);
@@ -102,13 +112,28 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     internal void Tick()
     {
         GameLanguageProvider.Tick();
+        UpdateWeatherFromCache();
+        RefreshLocalizedWeatherString();
+        nativeBridge.Tick(lastWeather);
+        weatherApplier.Apply(lastWeather);
+    }
+
+    internal static void NotifyGameLanguageChanged(object? languageValue)
+    {
+        GameLanguageProvider.SetFromGameValue(languageValue);
+        if (!ReferenceEquals(Instance, null))
+        {
+            Instance.RefreshLocalizedWeatherString();
+        }
+    }
+
+    private void RefreshLocalizedWeatherString()
+    {
         if (lastWeather != null)
         {
             CurrentUiWeatherString = UiWeatherString;
+            status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
         }
-
-        nativeBridge.Tick(lastWeather);
-        weatherApplier.Apply(lastWeather);
     }
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -117,7 +142,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         Logger.LogInfo($"场景已加载：{scene.name} ({mode})，触发实时天气扫描兜底。");
         EnsureRuntime();
         nativeBridge.ForceScan();
-        TriggerRefreshFromGameReady();
     }
 
     internal static void BootstrapAfterSceneLoad(string reason)
@@ -171,8 +195,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
             if (!fallbackRefreshStarted)
             {
                 fallbackRefreshStarted = true;
-                Logger.LogInfo("执行首次兜底天气刷新。若原生 UI Patch 未触发，也会继续获取天气并扫描对象。");
-                yield return RefreshWeather();
+                Logger.LogInfo("执行首次兜底场景扫描。天气刷新等待游戏主 UI 就绪后触发。");
             }
 
             nativeBridge.ForceScan();
@@ -188,8 +211,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
 
     internal void TriggerRefreshFromGameReady()
     {
-        EnsureRuntime();
-        runtime?.StartPluginCoroutine(RefreshWeather());
+        StartRefreshIfNeeded(force: true);
     }
 
     internal void CaptureWindowViewService(object service)
@@ -197,22 +219,334 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         nativeBridge.CaptureWindowViewService(service);
     }
 
-    internal IEnumerator RefreshLoop()
+    private void StartRefreshIfNeeded(bool force)
     {
-        Logger.LogInfo("实时天气刷新循环已启动。");
-        yield return new WaitForSeconds(2f);
-
-        while (true)
+        if (!weatherConfig.Enabled.Value || refreshInProgress)
         {
-            if (weatherConfig.Enabled.Value)
+            return;
+        }
+
+        bool needFetch = force || lastWeather == null || cachedForecastRoot == null;
+        if (!needFetch && cachedForecastRoot != null)
+        {
+            var lastForecastTime = GetLastForecastTime(cachedForecastRoot);
+            if (lastForecastTime.HasValue && DateTime.Now.Date > lastForecastTime.Value.Date)
             {
-                EnsureRuntime();
-                if (runtime != null)
+                needFetch = true;
+                Logger.LogInfo($"当前日期 {DateTime.Now:yyyy-MM-dd} 已跨越缓存预报日期 {lastForecastTime.Value:yyyy-MM-dd}，需要刷新天气数据。");
+            }
+        }
+
+        if (!force && Time.unscaledTime < nextAllowedRefreshTime)
+        {
+            return;
+        }
+
+        if (needFetch)
+        {
+            EnsureRuntime();
+            runtime?.StartPluginCoroutine(RefreshWeather());
+        }
+    }
+
+    private DateTime? GetLastForecastTime(Dictionary<string, object>? forecastRoot)
+    {
+        try
+        {
+            var hourly = forecastRoot?.GetDict("hourly");
+            var times = hourly?.GetList("time");
+            if (times == null || times.Count == 0)
+            {
+                return null;
+            }
+
+            var lastTimeStr = Convert.ToString(times[times.Count - 1], System.Globalization.CultureInfo.InvariantCulture);
+            if (DateTime.TryParse(lastTimeStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var lastTime))
+            {
+                return lastTime;
+            }
+        }
+        catch
+        {
+        }
+        return null;
+    }
+
+    private void RestoreCachedWeather()
+    {
+        var cached = TryLoadCachedWeather();
+        if (cached == null)
+        {
+            return;
+        }
+
+        ApplyWeatherSnapshot(cached);
+        if (cachedFetchedAtUtc.HasValue)
+        {
+            Logger.LogInfo($"已恢复缓存天气：{status}，缓存时间={cachedFetchedAtUtc.Value:O}");
+        }
+    }
+
+    internal void SaveCache(string forecastJson, GeoPoint point)
+    {
+        try
+        {
+            var fetchedAtUtc = DateTime.UtcNow;
+            var autoIp = weatherConfig.AutoIpLocation.Value;
+            var locationQuery = autoIp ? "auto_ip" : weatherConfig.ManualLocation.Value;
+            
+            var json = $"{{\n" +
+                       $"  \"fetched_at_utc\": \"{fetchedAtUtc:O}\",\n" +
+                       $"  \"auto_ip\": {(autoIp ? "true" : "false")},\n" +
+                       $"  \"location_query\": \"{EscapeJson(locationQuery)}\",\n" +
+                       $"  \"location_name\": \"{EscapeJson(point.Name)}\",\n" +
+                       $"  \"latitude\": {point.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},\n" +
+                       $"  \"longitude\": {point.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},\n" +
+                       $"  \"forecast_json\": \"{EscapeJson(forecastJson)}\"\n" +
+                       $"}}";
+
+            var configDir = Path.GetDirectoryName(CacheFilePath);
+            if (configDir != null && !Directory.Exists(configDir))
+            {
+                Directory.CreateDirectory(configDir);
+            }
+            File.WriteAllText(CacheFilePath, json);
+
+            cachedForecastRoot = MiniJson.Deserialize(forecastJson) as Dictionary<string, object>;
+            cachedPoint = point;
+            cachedFetchedAtUtc = fetchedAtUtc;
+
+            Logger.LogInfo("实时天气缓存已成功保存。");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning($"保存实时天气缓存失败：{ex.Message}");
+        }
+    }
+
+    internal WeatherSnapshot? TryLoadCachedWeather()
+    {
+        try
+        {
+            if (!File.Exists(CacheFilePath))
+            {
+                return null;
+            }
+
+            var json = File.ReadAllText(CacheFilePath);
+            var root = MiniJson.Deserialize(json) as Dictionary<string, object>;
+            if (root == null)
+            {
+                return null;
+            }
+
+            var fetchedAtStr = root.GetString("fetched_at_utc", string.Empty);
+            if (!DateTime.TryParse(fetchedAtStr, out var fetchedAtUtc))
+            {
+                return null;
+            }
+
+            var autoIp = root.GetBool("auto_ip", false);
+            var locationQuery = root.GetString("location_query", string.Empty);
+            if (autoIp != weatherConfig.AutoIpLocation.Value)
+            {
+                Logger.LogInfo("缓存已失效：AutoIpLocation 配置发生变更。");
+                return null;
+            }
+
+            if (!autoIp && locationQuery != weatherConfig.ManualLocation.Value)
+            {
+                Logger.LogInfo("缓存已失效：ManualLocation 配置发生变更。");
+                return null;
+            }
+
+            var forecastJson = root.GetString("forecast_json", string.Empty);
+            if (string.IsNullOrEmpty(forecastJson))
+            {
+                return null;
+            }
+
+            var latitude = root.GetDouble("latitude", 0d);
+            var longitude = root.GetDouble("longitude", 0d);
+            var locationName = root.GetString("location_name", "缓存位置");
+            var point = new GeoPoint(latitude, longitude, locationName);
+
+            var forecastRoot = MiniJson.Deserialize(forecastJson) as Dictionary<string, object>;
+            if (forecastRoot == null)
+            {
+                return null;
+            }
+
+            var snapshot = GetSnapshotFromForecast(forecastRoot, point, DateTime.Now);
+            if (snapshot != null)
+            {
+                cachedForecastRoot = forecastRoot;
+                cachedPoint = point;
+                cachedFetchedAtUtc = fetchedAtUtc;
+                return snapshot;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning($"读取或解析天气缓存失败：{ex.Message}");
+        }
+
+        return null;
+    }
+
+    private WeatherSnapshot? GetSnapshotFromForecast(Dictionary<string, object> forecastRoot, GeoPoint point, DateTime targetTime)
+    {
+        try
+        {
+            var hourly = forecastRoot.GetDict("hourly");
+            if (hourly == null)
+            {
+                return null;
+            }
+
+            var times = hourly.GetList("time");
+            var temp2m = hourly.GetList("temperature_2m");
+            var codes = hourly.GetList("weather_code");
+
+            if (times == null || temp2m == null || codes == null || times.Count == 0)
+            {
+                return null;
+            }
+
+            int closestHourIndex = -1;
+            double minDiffMinutes = double.MaxValue;
+
+            for (int i = 0; i < times.Count; i++)
+            {
+                var timeStr = Convert.ToString(times[i], System.Globalization.CultureInfo.InvariantCulture);
+                if (DateTime.TryParse(timeStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsedTime))
                 {
-                    yield return runtime.RunNestedCoroutine(RefreshWeather());
+                    var diff = Math.Abs((parsedTime - targetTime).TotalMinutes);
+                    if (diff < minDiffMinutes)
+                    {
+                       minDiffMinutes = diff;
+                       closestHourIndex = i;
+                    }
                 }
             }
 
+            if (closestHourIndex == -1 || minDiffMinutes > 180d)
+            {
+                Logger.LogInfo($"缓存预报数据未覆盖当前时间：closestHourIndex={closestHourIndex}, diff={minDiffMinutes:F1}分钟");
+                return null;
+            }
+
+            var code = Convert.ToInt32(codes[closestHourIndex], System.Globalization.CultureInfo.InvariantCulture);
+            var temp = Mathf.RoundToInt((float)Convert.ToDouble(temp2m[closestHourIndex], System.Globalization.CultureInfo.InvariantCulture));
+
+            var daily = forecastRoot.GetDict("daily");
+            DateTime? sunrise = null;
+            DateTime? sunset = null;
+
+            if (daily != null)
+            {
+                var dailyTimes = daily.GetList("time");
+                var sunrises = daily.GetList("sunrise");
+                var sunsets = daily.GetList("sunset");
+
+                if (dailyTimes != null && sunrises != null && sunsets != null)
+                {
+                    int closestDailyIndex = -1;
+                    double minDailyDiff = double.MaxValue;
+
+                    for (int j = 0; j < dailyTimes.Count; j++)
+                    {
+                        var dTimeStr = Convert.ToString(dailyTimes[j], System.Globalization.CultureInfo.InvariantCulture);
+                        if (DateTime.TryParse(dTimeStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsedDate))
+                        {
+                            var diff = Math.Abs((parsedDate.Date - targetTime.Date).TotalDays);
+                            if (diff < minDailyDiff)
+                            {
+                                minDailyDiff = diff;
+                                closestDailyIndex = j;
+                            }
+                        }
+                    }
+
+                    if (closestDailyIndex != -1 && minDailyDiff < 2d)
+                    {
+                        var sunriseStr = Convert.ToString(sunrises[closestDailyIndex], System.Globalization.CultureInfo.InvariantCulture);
+                        var sunsetStr = Convert.ToString(sunsets[closestDailyIndex], System.Globalization.CultureInfo.InvariantCulture);
+
+                        if (DateTime.TryParse(sunriseStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var riseTime))
+                        {
+                            sunrise = riseTime;
+                        }
+                        if (DateTime.TryParse(sunsetStr, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var setTime))
+                        {
+                            sunset = setTime;
+                        }
+                    }
+                }
+            }
+
+            return new WeatherSnapshot(point.Name, WeatherLocalizer.WeatherText(code, GameLanguage.English), code, temp, point.Latitude, point.Longitude, targetTime, sunrise, sunset);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning($"从预报 JSON 提取快照失败：{ex.Message}");
+            return null;
+        }
+    }
+
+    private void UpdateWeatherFromCache()
+    {
+        if (cachedForecastRoot == null || cachedPoint == null)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < nextCacheUpdateTime)
+        {
+            return;
+        }
+        nextCacheUpdateTime = Time.unscaledTime + 60f;
+
+        var snapshot = GetSnapshotFromForecast(cachedForecastRoot, cachedPoint, DateTime.Now);
+        if (snapshot != null)
+        {
+            if (lastWeather == null ||
+                lastWeather.Code != snapshot.Code ||
+                lastWeather.TemperatureCelsius != snapshot.TemperatureCelsius ||
+                lastWeather.SolarPhase != snapshot.SolarPhase)
+            {
+                ApplyWeatherSnapshot(snapshot);
+                Logger.LogInfo($"根据缓存预报更新天气：{status}");
+            }
+        }
+        else
+        {
+            Logger.LogInfo("缓存预报已失效或未覆盖当前时间，触发网络刷新。");
+            StartRefreshIfNeeded(force: false);
+        }
+    }
+
+    private static string EscapeJson(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+    }
+
+    private void ApplyWeatherSnapshot(WeatherSnapshot snapshot)
+    {
+        lastWeather = snapshot;
+        CurrentUiWeatherString = UiWeatherString;
+        status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
+        nativeBridge.ApplyWeather(lastWeather);
+        weatherApplier.RebindSceneObjects();
+    }
+
+    internal IEnumerator RefreshLoop()
+    {
+        Logger.LogInfo("实时天气刷新循环已启动。");
+        while (true)
+        {
+            StartRefreshIfNeeded(force: false);
             var minutes = Mathf.Max(1, weatherConfig.RefreshMinutes.Value);
             yield return new WaitForSeconds(minutes * 60f);
         }
@@ -220,6 +554,13 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
 
     internal IEnumerator RefreshWeather()
     {
+        if (refreshInProgress || Time.unscaledTime < nextAllowedRefreshTime)
+        {
+            yield break;
+        }
+
+        refreshInProgress = true;
+        nextAllowedRefreshTime = Time.unscaledTime + 10f;
         Logger.LogInfo("开始刷新实时天气。");
         status = "刷新中...";
         WeatherClient.Result? result = null;
@@ -232,6 +573,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         {
             status = "刷新失败：运行时组件不存在";
             Logger.LogWarning(status);
+            refreshInProgress = false;
             yield break;
         }
 
@@ -242,6 +584,12 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
             lastWeather = result.Weather;
             CurrentUiWeatherString = UiWeatherString;
             status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
+            
+            if (result.RawJson != null && result.Point != null)
+            {
+                SaveCache(result.RawJson, result.Point);
+            }
+
             nativeBridge.ApplyWeather(lastWeather);
             weatherApplier.RebindSceneObjects();
             Logger.LogInfo($"天气已更新：{status}");
@@ -252,6 +600,8 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
             status = result?.Error ?? "刷新失败";
             Logger.LogWarning(status);
         }
+
+        refreshInProgress = false;
     }
 
     private static string FormatOptionalTime(DateTime? value)
@@ -419,7 +769,7 @@ internal sealed class WeatherClient
         var url = "https://api.open-meteo.com/v1/forecast" +
                   $"?latitude={point.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}" +
                   $"&longitude={point.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}" +
-                  "&current=temperature_2m,weather_code&daily=sunrise,sunset&timezone=auto";
+                  "&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&daily=sunrise,sunset&timezone=auto&forecast_days=1";
         using var request = UnityWebRequest.Get(url);
         request.timeout = Mathf.Clamp(config.TimeoutSeconds.Value, 2, 15);
         yield return request.SendWebRequest();
@@ -431,7 +781,7 @@ internal sealed class WeatherClient
         }
 
         var snapshot = PublicApiParser.ParseOpenMeteoWeather(request.downloadHandler.text, point);
-        done(snapshot == null ? Result.Fail("天气响应解析失败。") : Result.Ok(snapshot));
+        done(snapshot == null ? Result.Fail("天气响应解析失败。") : Result.Ok(snapshot, request.downloadHandler.text, point));
     }
 
     private static bool TryParseLatLon(string location, out GeoPoint point)
@@ -453,14 +803,18 @@ internal sealed class WeatherClient
     {
         internal WeatherSnapshot? Weather { get; }
         internal string? Error { get; }
+        internal string? RawJson { get; }
+        internal GeoPoint? Point { get; }
 
-        private Result(WeatherSnapshot? weather, string? error)
+        private Result(WeatherSnapshot? weather, string? error, string? rawJson = null, GeoPoint? point = null)
         {
             Weather = weather;
             Error = error;
+            RawJson = rawJson;
+            Point = point;
         }
 
-        internal static Result Ok(WeatherSnapshot weather) => new(weather, null);
+        internal static Result Ok(WeatherSnapshot weather, string rawJson, GeoPoint point) => new(weather, null, rawJson, point);
         internal static Result Fail(string error) => new(null, error);
     }
 }
@@ -531,6 +885,7 @@ internal static class GameLanguageProvider
     private static object? languageSupplier;
     private static PropertyInfo? languageProperty;
     private static float nextScanTime;
+    private static bool loggedFallback;
 
     internal static GameLanguage CurrentLanguage { get; private set; } = GameLanguage.English;
 
@@ -541,33 +896,77 @@ internal static class GameLanguageProvider
             return;
         }
 
-        nextScanTime = Time.unscaledTime + 2f;
+        nextScanTime = Time.unscaledTime + 15f;
         if (languageSupplier == null || languageProperty == null)
         {
             ScanLanguageSupplier();
         }
 
-        var value = languageProperty?.GetValue(languageSupplier)?.ToString();
-        if (!string.IsNullOrEmpty(value) && Enum.TryParse<GameLanguage>(value, out var language))
+        SetFromGameValue(languageProperty?.GetValue(languageSupplier));
+    }
+
+    internal static void SetFromGameValue(object? value)
+    {
+        if (value != null && Enum.TryParse<GameLanguage>(value.ToString(), out var language) && CurrentLanguage != language)
         {
             CurrentLanguage = language;
+            RealTimeWeatherPlugin.Log.LogInfo($"游戏语言已切换：{language}");
         }
     }
 
     private static void ScanLanguageSupplier()
     {
-        foreach (var component in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+        foreach (var unityObject in Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
         {
-            if (component == null || component.GetType().FullName != "Bulbul.LanguageSupplier")
+            if (unityObject == null)
             {
                 continue;
             }
 
-            languageSupplier = component;
-            languageProperty = component.GetType().GetProperty("Language", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            RealTimeWeatherPlugin.Log.LogInfo("已绑定游戏语言供应器 Bulbul.LanguageSupplier。");
-            return;
+            if (TryBindLanguageSupplier(unityObject))
+            {
+                return;
+            }
+
+            foreach (var field in unityObject.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (field.FieldType.FullName != "Bulbul.LanguageSupplier")
+                {
+                    continue;
+                }
+
+                var value = field.GetValue(unityObject);
+                if (value != null && TryBindLanguageSupplier(value))
+                {
+                    return;
+                }
+            }
         }
+
+        if (!loggedFallback)
+        {
+            loggedFallback = true;
+            RealTimeWeatherPlugin.Log.LogInfo("尚未找到 Bulbul.LanguageSupplier，天气文本暂时使用 English。");
+        }
+    }
+
+    private static bool TryBindLanguageSupplier(object candidate)
+    {
+        if (candidate.GetType().FullName != "Bulbul.LanguageSupplier")
+        {
+            return false;
+        }
+
+        var property = candidate.GetType().GetProperty("Language", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (property == null)
+        {
+            return false;
+        }
+
+        languageSupplier = candidate;
+        languageProperty = property;
+        RealTimeWeatherPlugin.Log.LogInfo("已绑定游戏语言供应器 Bulbul.LanguageSupplier。");
+        return true;
     }
 }
 

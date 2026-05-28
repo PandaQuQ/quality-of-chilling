@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using HarmonyLib;
+using UnityEngine;
 
 namespace RealTimeWeatherForChill;
 
@@ -59,6 +60,28 @@ internal static class CurrentDateAndTimeUiPatch
             plugin.TriggerRefreshFromGameReady();
         }
 
+        ApplyWeatherText(__instance);
+    }
+
+    internal static void RefreshAll()
+    {
+        var type = AccessTools.TypeByName("Bulbul.CurrentDateAndTimeUI");
+        if (type == null)
+        {
+            return;
+        }
+
+        foreach (var component in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+        {
+            if (component != null && type.IsInstanceOfType(component))
+            {
+                ApplyWeatherText(component);
+            }
+        }
+    }
+
+    private static void ApplyWeatherText(object instance)
+    {
         var weatherText = RealTimeWeatherPlugin.CurrentUiWeatherString;
         if (string.IsNullOrEmpty(weatherText))
         {
@@ -67,8 +90,8 @@ internal static class CurrentDateAndTimeUiPatch
 
         try
         {
-            var field = __instance.GetType().GetField("_dateText", BindingFlags.Instance | BindingFlags.NonPublic);
-            var textObject = field?.GetValue(__instance);
+            var field = instance.GetType().GetField("_dateText", BindingFlags.Instance | BindingFlags.NonPublic);
+            var textObject = field?.GetValue(instance);
             var textProperty = textObject?.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
             if (textProperty?.GetValue(textObject) is string currentText && !currentText.Contains(weatherText))
             {
@@ -90,5 +113,30 @@ internal static class CurrentDateAndTimeUiPatch
     {
         var index = value.IndexOf(" | ", StringComparison.Ordinal);
         return index >= 0 ? value.Substring(0, index) : value;
+    }
+}
+
+[HarmonyPatch]
+internal static class LanguageSupplierSetPatch
+{
+    private static MethodBase? TargetMethod()
+    {
+        var type = AccessTools.TypeByName("Bulbul.LanguageSupplier");
+        return type?.GetMethod("Set", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? type?.GetMethod("set_Language", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    }
+
+    private static void Postfix(object __instance)
+    {
+        try
+        {
+            var property = __instance.GetType().GetProperty("Language", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            RealTimeWeatherPlugin.NotifyGameLanguageChanged(property?.GetValue(__instance));
+            CurrentDateAndTimeUiPatch.RefreshAll();
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogDebug($"处理游戏语言变更失败：{ex.Message}");
+        }
     }
 }
