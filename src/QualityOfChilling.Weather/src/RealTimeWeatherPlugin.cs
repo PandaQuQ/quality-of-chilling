@@ -127,7 +127,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         }
     }
 
-    private void RefreshLocalizedWeatherString()
+    internal void RefreshLocalizedWeatherString()
     {
         if (lastWeather != null)
         {
@@ -896,21 +896,59 @@ internal static class GameLanguageProvider
             return;
         }
 
-        nextScanTime = Time.unscaledTime + 15f;
         if (languageSupplier == null || languageProperty == null)
         {
             ScanLanguageSupplier();
+            if (languageSupplier == null || languageProperty == null)
+            {
+                nextScanTime = Time.unscaledTime + 1f;
+                return;
+            }
         }
 
+        nextScanTime = Time.unscaledTime + 15f;
         SetFromGameValue(languageProperty?.GetValue(languageSupplier));
     }
 
     internal static void SetFromGameValue(object? value)
     {
-        if (value != null && Enum.TryParse<GameLanguage>(value.ToString(), out var language) && CurrentLanguage != language)
+        if (value == null)
         {
-            CurrentLanguage = language;
-            RealTimeWeatherPlugin.Log.LogInfo($"游戏语言已切换：{language}");
+            return;
+        }
+
+        object actualValue = value;
+        try
+        {
+            var type = value.GetType();
+            if (type.IsGenericType && type.GetGenericTypeDefinition().FullName.StartsWith("R3.ReadOnlyReactiveProperty"))
+            {
+                var valueProp = type.GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+                if (valueProp != null)
+                {
+                    actualValue = valueProp.GetValue(value) ?? value;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        if (Enum.TryParse<GameLanguage>(actualValue.ToString(), out var language))
+        {
+            if (CurrentLanguage != language)
+            {
+                CurrentLanguage = language;
+                RealTimeWeatherPlugin.Log.LogInfo($"游戏语言已切换：{language}");
+                
+                CurrentDateAndTimeUiPatch.RefreshAll();
+                SettingUiInjector.RefreshSettingLabels();
+                
+                if (RealTimeWeatherPlugin.Instance != null)
+                {
+                    RealTimeWeatherPlugin.Instance.RefreshLocalizedWeatherString();
+                }
+            }
         }
     }
 
