@@ -12,7 +12,7 @@ The core module, `QualityOfChilling.Weather`, integrates real-world weather stat
 
 <div align="center">
   <a href="https://store.steampowered.com/app/3548580">
-    <img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3548580/header.jpg" alt="Chill with You: Lo-Fi Story on Steam" width="460" />
+    <img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3548580/2c7a564c618bbfb933436be119f0f8cb040bae4b/header.jpg?t=1779263142" alt="Chill with You: Lo-Fi Story on Steam" width="460" />
   </a>
 </div>
 
