@@ -134,6 +134,7 @@ internal static class LanguageSupplierSetPatch
             var property = __instance.GetType().GetProperty("Language", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             RealTimeWeatherPlugin.NotifyGameLanguageChanged(property?.GetValue(__instance));
             CurrentDateAndTimeUiPatch.RefreshAll();
+            SettingUiInjector.RefreshSettingLabels();
         }
         catch (Exception ex)
         {
@@ -166,6 +167,27 @@ internal static class SettingUiSetupPatch
 
 internal static class SettingUiInjector
 {
+    internal static void RefreshSettingLabels()
+    {
+        try
+        {
+            var settingUiType = AccessTools.TypeByName("Bulbul.SettingUI");
+            if (settingUiType == null) return;
+
+            foreach (var component in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+            {
+                if (component != null && settingUiType.IsInstanceOfType(component))
+                {
+                    Inject(component);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogDebug($"刷新设置菜单语言标签失败：{ex.Message}");
+        }
+    }
+
     internal static void Inject(object settingUi)
     {
         var type = settingUi.GetType();
@@ -219,8 +241,12 @@ internal static class SettingUiInjector
         }
 
         // Check if already injected in this transform
-        if (contentTransform.Find("RealTimeWeather_EnableRow") != null)
+        var weatherRowTransform = contentTransform.Find("RealTimeWeather_EnableRow");
+        var autoLocRowTransform = contentTransform.Find("RealTimeWeather_AutoLocRow");
+
+        if (weatherRowTransform != null && autoLocRowTransform != null)
         {
+            UpdateInjectedRowVisuals(weatherRowTransform.gameObject, autoLocRowTransform.gameObject);
             return;
         }
 
@@ -252,7 +278,7 @@ internal static class SettingUiInjector
         {
             GameLanguage.ChineseSimplified => "启用实时天气",
             GameLanguage.ChineseTraditional => "啟用即時天氣",
-            GameLanguage.Japanese => "实时天气同步",
+            GameLanguage.Japanese => "リアルタイム天気同期",
             GameLanguage.Korean => "실시간 날씨 동기화",
             GameLanguage.Portuguese => "Tempo em Tempo Real",
             GameLanguage.Russian => "Реальная погода",
@@ -331,7 +357,7 @@ internal static class SettingUiInjector
         {
             GameLanguage.ChineseSimplified => "自动 IP 定位",
             GameLanguage.ChineseTraditional => "自動 IP 定位",
-            GameLanguage.Japanese => "自动 IP 定位",
+            GameLanguage.Japanese => "自動IP取得",
             GameLanguage.Korean => "자동 IP 위치",
             GameLanguage.Portuguese => "Localização por IP",
             GameLanguage.Russian => "Автоопределение IP",
@@ -410,6 +436,89 @@ internal static class SettingUiInjector
         }
 
         RealTimeWeatherPlugin.Log.LogInfo("已成功在常规设置菜单内注入“启用实时天气”和“自动 IP 定位”两个原生选项。");
+    }
+
+    private static void UpdateInjectedRowVisuals(GameObject weatherRow, GameObject autoLocRow)
+    {
+        string labelText = RealTimeWeatherPlugin.CurrentLanguage switch
+        {
+            GameLanguage.ChineseSimplified => "启用实时天气",
+            GameLanguage.ChineseTraditional => "啟用即時天氣",
+            GameLanguage.Japanese => "リアルタイム天気同期",
+            GameLanguage.Korean => "실시간 날씨 동기화",
+            GameLanguage.Portuguese => "Tempo em Tempo Real",
+            GameLanguage.Russian => "Реальная погода",
+            _ => "Real-time Weather"
+        };
+
+        string autoLocLabel = RealTimeWeatherPlugin.CurrentLanguage switch
+        {
+            GameLanguage.ChineseSimplified => "自动 IP 定位",
+            GameLanguage.ChineseTraditional => "自動 IP 定位",
+            GameLanguage.Japanese => "自動IP取得",
+            GameLanguage.Korean => "자동 IP 위치",
+            GameLanguage.Portuguese => "Localização por IP",
+            GameLanguage.Russian => "Автоопределение IP",
+            _ => "Auto IP Location"
+        };
+
+        var interactableUiType = AccessTools.TypeByName("Bulbul.InteractableUI");
+        
+        var weatherButtons = weatherRow.GetComponentsInChildren(interactableUiType, true);
+        Component? btnOn = null;
+        Component? btnOff = null;
+        if (weatherButtons != null && weatherButtons.Length >= 2)
+        {
+            btnOn = weatherButtons[0];
+            btnOff = weatherButtons[1];
+        }
+
+        if (btnOn != null && btnOff != null)
+        {
+            SetRowLabel(weatherRow, labelText, btnOn, btnOff);
+            var config = RealTimeWeatherPlugin.Instance?.Config;
+            bool isEnabled = config != null && config.Bind("General", "Enabled", true).Value;
+            SetIsUsing(btnOn, isEnabled);
+            SetIsUsing(btnOff, !isEnabled);
+        }
+        else
+        {
+            SetText(weatherRow, labelText);
+        }
+
+        var autoLocButtons = autoLocRow.GetComponentsInChildren(interactableUiType, true);
+        Component? autoLocBtnOn = null;
+        Component? autoLocBtnOff = null;
+        if (autoLocButtons != null && autoLocButtons.Length >= 2)
+        {
+            autoLocBtnOn = autoLocButtons[0];
+            autoLocBtnOff = autoLocButtons[1];
+        }
+
+        if (autoLocBtnOn != null && autoLocBtnOff != null)
+        {
+            SetRowLabel(autoLocRow, autoLocLabel, autoLocBtnOn, autoLocBtnOff);
+            var config = RealTimeWeatherPlugin.Instance?.Config;
+            bool isAutoIp = config != null && config.Bind("Location", "AutoIpLocation", false).Value;
+            SetIsUsing(autoLocBtnOn, isAutoIp);
+            SetIsUsing(autoLocBtnOff, !isAutoIp);
+        }
+        else
+        {
+            SetText(autoLocRow, autoLocLabel);
+        }
+
+        // Apply Sibling Index Fix
+        weatherRow.transform.SetAsFirstSibling();
+        autoLocRow.transform.SetAsFirstSibling();
+
+        // Apply Mask Refresh Toggle Hack
+        var rectMask = weatherRow.transform.parent?.parent?.GetComponent<UnityEngine.UI.RectMask2D>();
+        if (rectMask != null)
+        {
+            rectMask.enabled = false;
+            rectMask.enabled = true;
+        }
     }
 
     private static Transform? GetParentTransform(object settingUi, string fieldName)
@@ -572,6 +681,18 @@ internal static class SettingUiInjector
                     size.y += Mathf.Abs(spacing) * 2f;
                     contentRect.sizeDelta = size;
                     RealTimeWeatherPlugin.Log.LogInfo($"已成功调整常规设置 Content 容器高度，新增了 {Mathf.Abs(spacing) * 2f}px，当前总高度 Y: {contentRect.sizeDelta.y}px");
+                }
+
+                // Apply Sibling Index Fix
+                weatherRow.transform.SetAsFirstSibling();
+                autoLocRow.transform.SetAsFirstSibling();
+
+                // Apply Mask Refresh Toggle Hack
+                var rectMask = contentTransform.parent?.GetComponent<UnityEngine.UI.RectMask2D>();
+                if (rectMask != null)
+                {
+                    rectMask.enabled = false;
+                    rectMask.enabled = true;
                 }
             }
         }
