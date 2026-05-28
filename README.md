@@ -10,6 +10,12 @@
 
 The core module, `QualityOfChilling.Weather`, integrates real-world weather states and day/night transitions into the game. It provides a connection between your real-world environment and the lo-fi workspace.
 
+<div align="center">
+  <a href="https://store.steampowered.com/app/3548580">
+    <img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3548580/header.jpg" alt="Chill with You: Lo-Fi Story on Steam" width="460" />
+  </a>
+</div>
+
 ---
 
 ## Key Features
