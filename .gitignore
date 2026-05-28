@@ -1,0 +1,20 @@
+bin/
+obj/
+artifacts/
+.build/
+.vs/
+.idea/
+*.user
+*.suo
+*.log
+*.zip
+*.7z
+*.rar
+lib/
+refs/
+BepInEx/
+Chill With You_Data/
+*.dll
+*.pdb
+!src/**/src/**/*.cs
+!src/**/*.csproj
