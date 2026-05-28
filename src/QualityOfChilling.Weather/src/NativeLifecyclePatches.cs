@@ -274,16 +274,7 @@ internal static class SettingUiInjector
         weatherRow.name = "RealTimeWeather_EnableRow";
         weatherRow.SetActive(true);
 
-        string labelText = RealTimeWeatherPlugin.CurrentLanguage switch
-        {
-            GameLanguage.ChineseSimplified => "启用实时天气",
-            GameLanguage.ChineseTraditional => "啟用即時天氣",
-            GameLanguage.Japanese => "リアルタイム天気同期",
-            GameLanguage.Korean => "실시간 날씨 동기화",
-            GameLanguage.Portuguese => "Tempo em Tempo Real",
-            GameLanguage.Russian => "Реальная погода",
-            _ => "Real-time Weather"
-        };
+        string labelText = WeatherLocalizer.GetEnableWeatherText(RealTimeWeatherPlugin.CurrentLanguage);
 
         var interactableUiType = AccessTools.TypeByName("Bulbul.InteractableUI");
         
@@ -353,16 +344,7 @@ internal static class SettingUiInjector
         autoLocRow.name = "RealTimeWeather_AutoLocRow";
         autoLocRow.SetActive(true);
 
-        string autoLocLabel = RealTimeWeatherPlugin.CurrentLanguage switch
-        {
-            GameLanguage.ChineseSimplified => "自动 IP 定位",
-            GameLanguage.ChineseTraditional => "自動 IP 定位",
-            GameLanguage.Japanese => "自動IP取得",
-            GameLanguage.Korean => "자동 IP 위치",
-            GameLanguage.Portuguese => "Localização por IP",
-            GameLanguage.Russian => "Автоопределение IP",
-            _ => "Auto IP Location"
-        };
+        string autoLocLabel = WeatherLocalizer.GetAutoLocText(RealTimeWeatherPlugin.CurrentLanguage);
 
         Component? autoLocBtnOn = FindChildRecursive(autoLocRow.transform, btnOnName)?.GetComponent(interactableUiType);
         Component? autoLocBtnOff = FindChildRecursive(autoLocRow.transform, btnOffName)?.GetComponent(interactableUiType);
@@ -440,27 +422,8 @@ internal static class SettingUiInjector
 
     private static void UpdateInjectedRowVisuals(GameObject weatherRow, GameObject autoLocRow)
     {
-        string labelText = RealTimeWeatherPlugin.CurrentLanguage switch
-        {
-            GameLanguage.ChineseSimplified => "启用实时天气",
-            GameLanguage.ChineseTraditional => "啟用即時天氣",
-            GameLanguage.Japanese => "リアルタイム天気同期",
-            GameLanguage.Korean => "실시간 날씨 동기화",
-            GameLanguage.Portuguese => "Tempo em Tempo Real",
-            GameLanguage.Russian => "Реальная погода",
-            _ => "Real-time Weather"
-        };
-
-        string autoLocLabel = RealTimeWeatherPlugin.CurrentLanguage switch
-        {
-            GameLanguage.ChineseSimplified => "自动 IP 定位",
-            GameLanguage.ChineseTraditional => "自動 IP 定位",
-            GameLanguage.Japanese => "自動IP取得",
-            GameLanguage.Korean => "자동 IP 위치",
-            GameLanguage.Portuguese => "Localização por IP",
-            GameLanguage.Russian => "Автоопределение IP",
-            _ => "Auto IP Location"
-        };
+        string labelText = WeatherLocalizer.GetEnableWeatherText(RealTimeWeatherPlugin.CurrentLanguage);
+        string autoLocLabel = WeatherLocalizer.GetAutoLocText(RealTimeWeatherPlugin.CurrentLanguage);
 
         var interactableUiType = AccessTools.TypeByName("Bulbul.InteractableUI");
         
