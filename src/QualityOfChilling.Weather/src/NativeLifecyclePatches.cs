@@ -190,8 +190,24 @@ internal static class SettingUiInjector
             generalParent = vsyncRow.transform.parent;
         }
 
+        // Standard ScrollView hierarchy: ScrollView/Viewport/Content
+        var contentTransform = generalParent.Find("ScrollView/Viewport/Content");
+        if (contentTransform == null)
+        {
+            contentTransform = generalParent.Find("ScrollView/Viewport/content");
+        }
+        if (contentTransform == null)
+        {
+            contentTransform = generalParent;
+            RealTimeWeatherPlugin.Log.LogWarning("未找到常规设置的 ScrollView Content，使用常规设置容器根节点。");
+        }
+        else
+        {
+            RealTimeWeatherPlugin.Log.LogInfo("已成功定位常规设置的 ScrollView Content 容器。");
+        }
+
         // Check if already injected in this transform
-        if (generalParent.Find("RealTimeWeather_EnableRow") != null)
+        if (contentTransform.Find("RealTimeWeather_EnableRow") != null)
         {
             return;
         }
@@ -199,7 +215,7 @@ internal static class SettingUiInjector
         RealTimeWeatherPlugin.Log.LogInfo("开始在游戏设置菜单内原生注入实时天气选项...");
 
         // 1. Clone Row for Enable Weather
-        var weatherRow = UnityEngine.Object.Instantiate(vsyncRow, generalParent);
+        var weatherRow = UnityEngine.Object.Instantiate(vsyncRow, contentTransform);
         weatherRow.name = "RealTimeWeather_EnableRow";
         weatherRow.SetActive(true);
 
@@ -215,11 +231,13 @@ internal static class SettingUiInjector
         };
 
         var interactableUiType = AccessTools.TypeByName("Bulbul.InteractableUI");
-        Component? btnOn = weatherRow.transform.Find(vsyncAct.name)?.GetComponent(interactableUiType);
-        Component? btnOff = weatherRow.transform.Find(vsyncDeact.name)?.GetComponent(interactableUiType);
+        
+        Component? btnOn = FindChildRecursive(weatherRow.transform, vsyncAct.name)?.GetComponent(interactableUiType);
+        Component? btnOff = FindChildRecursive(weatherRow.transform, vsyncDeact.name)?.GetComponent(interactableUiType);
 
         if (btnOn == null || btnOff == null)
         {
+            RealTimeWeatherPlugin.Log.LogWarning("通过递归名称未找到克隆的‘启用实时天气’按钮，回退至 GetComponentsInChildren。");
             var enableButtons = weatherRow.GetComponentsInChildren(interactableUiType, true);
             if (enableButtons != null && enableButtons.Length >= 2)
             {
@@ -276,7 +294,7 @@ internal static class SettingUiInjector
         }
 
         // 2. Clone Row for Auto IP Location
-        var autoLocRow = UnityEngine.Object.Instantiate(vsyncRow, generalParent);
+        var autoLocRow = UnityEngine.Object.Instantiate(vsyncRow, contentTransform);
         autoLocRow.name = "RealTimeWeather_AutoLocRow";
         autoLocRow.SetActive(true);
 
@@ -291,11 +309,12 @@ internal static class SettingUiInjector
             _ => "Auto IP Location"
         };
 
-        Component? autoLocBtnOn = autoLocRow.transform.Find(vsyncAct.name)?.GetComponent(interactableUiType);
-        Component? autoLocBtnOff = autoLocRow.transform.Find(vsyncDeact.name)?.GetComponent(interactableUiType);
+        Component? autoLocBtnOn = FindChildRecursive(autoLocRow.transform, vsyncAct.name)?.GetComponent(interactableUiType);
+        Component? autoLocBtnOff = FindChildRecursive(autoLocRow.transform, vsyncDeact.name)?.GetComponent(interactableUiType);
 
         if (autoLocBtnOn == null || autoLocBtnOff == null)
         {
+            RealTimeWeatherPlugin.Log.LogWarning("通过递归名称未找到克隆的‘自动 IP 定位’按钮，回退至 GetComponentsInChildren。");
             var autoLocButtons = autoLocRow.GetComponentsInChildren(interactableUiType, true);
             if (autoLocButtons != null && autoLocButtons.Length >= 2)
             {
@@ -354,7 +373,7 @@ internal static class SettingUiInjector
         // Apply visual layout adjustments to position injected rows properly
         try
         {
-            PositionInjectedRows(weatherRow, autoLocRow, generalParent);
+            PositionInjectedRows(weatherRow, autoLocRow, contentTransform);
         }
         catch (Exception ex)
         {
@@ -411,12 +430,27 @@ internal static class SettingUiInjector
         }
     }
 
-    private static void PositionInjectedRows(GameObject weatherRow, GameObject autoLocRow, Transform generalParent)
+    private static Transform? FindChildRecursive(Transform parent, string name)
+    {
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            var child = parent.GetChild(i);
+            if (child.name == name)
+            {
+                return child;
+            }
+            var result = FindChildRecursive(child, name);
+            if (result != null) return result;
+        }
+        return null;
+    }
+
+    private static void PositionInjectedRows(GameObject weatherRow, GameObject autoLocRow, Transform contentTransform)
     {
         var children = new List<RectTransform>();
-        for (int i = 0; i < generalParent.childCount; i++)
+        for (int i = 0; i < contentTransform.childCount; i++)
         {
-            var child = generalParent.GetChild(i) as RectTransform;
+            var child = contentTransform.GetChild(i) as RectTransform;
             if (child != null && child.gameObject.activeSelf && 
                 child.gameObject != weatherRow && child.gameObject != autoLocRow)
             {
@@ -426,13 +460,13 @@ internal static class SettingUiInjector
 
         if (children.Count == 0)
         {
-            RealTimeWeatherPlugin.Log.LogWarning("常规设置容器中没有找到任何原生子项，无法定位注入行。");
+            RealTimeWeatherPlugin.Log.LogWarning("常规设置 Content 容器中没有找到任何原生子项，无法定位注入行。");
             return;
         }
 
         foreach (var child in children)
         {
-            RealTimeWeatherPlugin.Log.LogInfo($"[UI Debug] 子项: {child.name}, anchoredPosition={child.anchoredPosition}, size={child.rect.size}");
+            RealTimeWeatherPlugin.Log.LogInfo($"[UI Debug] Content子项: {child.name}, anchoredPosition={child.anchoredPosition}, size={child.rect.size}");
         }
 
         children.Sort((a, b) => b.anchoredPosition.y.CompareTo(a.anchoredPosition.y));
@@ -500,6 +534,16 @@ internal static class SettingUiInjector
                 autoLocRect.anchoredPosition = posAutoLoc;
 
                 RealTimeWeatherPlugin.Log.LogInfo($"已成功设置注入选项的位置。启用实时天气 Y: {weatherRect.anchoredPosition.y}, 自动 IP 定位 Y: {autoLocRect.anchoredPosition.y}");
+
+                // Dynamically expand the ScrollView Content height to accommodate the new rows and ensure scrolling works
+                var contentRect = contentTransform.GetComponent<RectTransform>();
+                if (contentRect != null)
+                {
+                    Vector2 size = contentRect.sizeDelta;
+                    size.y += Mathf.Abs(spacing) * 2f;
+                    contentRect.sizeDelta = size;
+                    RealTimeWeatherPlugin.Log.LogInfo($"已成功调整常规设置 Content 容器高度，新增了 {Mathf.Abs(spacing) * 2f}px，当前总高度 Y: {contentRect.sizeDelta.y}px");
+                }
             }
         }
     }
