@@ -53,7 +53,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
             {
                 return string.Empty;
             }
-            string loc = !string.IsNullOrEmpty(currentLocalizedLocation) ? currentLocalizedLocation + " " : string.Empty;
+            string loc = !string.IsNullOrEmpty(currentLocalizedLocation) ? currentLocalizedLocation + " | " : string.Empty;
             return $"{loc}{WeatherLocalizer.WeatherText(applied.Code, CurrentLanguage)} {applied.TemperatureCelsius}°C";
         }
     }
