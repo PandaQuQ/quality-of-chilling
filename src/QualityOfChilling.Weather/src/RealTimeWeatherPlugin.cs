@@ -11,6 +11,7 @@ using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
+using Bulbul;
 
 namespace RealTimeWeatherForChill;
 
@@ -39,10 +40,22 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     private Harmony? harmony;
     private WeatherConfig weatherConfig = null!;
     private WeatherClient weatherClient = null!;
-    private WeatherApplier weatherApplier = null!;
     private NativeGameBridge nativeBridge = null!;
+    internal WeatherConfig WeatherConfig => weatherConfig;
     internal WeatherSnapshot? LastWeather => lastWeather;
-    internal string UiWeatherString => lastWeather == null ? string.Empty : $"{WeatherLocalizer.WeatherText(lastWeather.Code, CurrentLanguage)} {lastWeather.TemperatureCelsius}°C";
+    internal string UiWeatherString
+    {
+        get
+        {
+            if (lastWeather == null) return string.Empty;
+            var applied = lastWeather.OverrideConfig(weatherConfig);
+            if (!weatherConfig.InjectNativeDateTimeUI.Value || !weatherConfig.SyncWeather.Value)
+            {
+                return string.Empty;
+            }
+            return $"{WeatherLocalizer.WeatherText(applied.Code, CurrentLanguage)} {applied.TemperatureCelsius}°C";
+        }
+    }
     private WeatherSnapshot? lastWeather;
     private WeatherRuntime? runtime;
     private string status = "未刷新";
@@ -65,7 +78,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         Log = Logger;
         weatherConfig = new WeatherConfig(Config);
         weatherClient = new WeatherClient(weatherConfig);
-        weatherApplier = new WeatherApplier(weatherConfig);
         nativeBridge = new NativeGameBridge(weatherConfig);
         RestoreCachedWeather();
 
@@ -114,8 +126,8 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         GameLanguageProvider.Tick();
         UpdateWeatherFromCache();
         RefreshLocalizedWeatherString();
-        nativeBridge.Tick(lastWeather);
-        weatherApplier.Apply(lastWeather);
+        var appliedWeather = lastWeather?.OverrideConfig(weatherConfig);
+        nativeBridge.Tick(appliedWeather);
     }
 
     internal static void NotifyGameLanguageChanged(object? languageValue)
@@ -131,8 +143,18 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     {
         if (lastWeather != null)
         {
+            var appliedWeather = lastWeather.OverrideConfig(weatherConfig);
             CurrentUiWeatherString = UiWeatherString;
-            status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
+            status = $"{appliedWeather.Location} / {CurrentUiWeatherString}";
+        }
+    }
+
+    internal void ReapplyCurrentWeather()
+    {
+        if (lastWeather != null)
+        {
+            nativeBridge.ResetAppliedState();
+            ApplyWeatherSnapshot(lastWeather);
         }
     }
 
@@ -214,14 +236,11 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         StartRefreshIfNeeded(force: true);
     }
 
-    internal void CaptureWindowViewService(object service)
-    {
-        nativeBridge.CaptureWindowViewService(service);
-    }
+
 
     private void StartRefreshIfNeeded(bool force)
     {
-        if (!weatherConfig.Enabled.Value || refreshInProgress)
+        if (refreshInProgress)
         {
             return;
         }
@@ -535,10 +554,9 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     private void ApplyWeatherSnapshot(WeatherSnapshot snapshot)
     {
         lastWeather = snapshot;
-        CurrentUiWeatherString = UiWeatherString;
-        status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
-        nativeBridge.ApplyWeather(lastWeather);
-        weatherApplier.RebindSceneObjects();
+        RefreshLocalizedWeatherString();
+        var appliedWeather = lastWeather.OverrideConfig(weatherConfig);
+        nativeBridge.ApplyWeather(appliedWeather);
     }
 
     internal IEnumerator RefreshLoop()
@@ -591,7 +609,6 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
             }
 
             nativeBridge.ApplyWeather(lastWeather);
-            weatherApplier.RebindSceneObjects();
             Logger.LogInfo($"天气已更新：{status}");
             Logger.LogInfo($"昼夜状态：local={lastWeather.LocalTime:yyyy-MM-dd HH:mm}, sunrise={FormatOptionalTime(lastWeather.SunriseTime)}, sunset={FormatOptionalTime(lastWeather.SunsetTime)}, phase={lastWeather.SolarPhase}, lat={lastWeather.Latitude:0.####}, lon={lastWeather.Longitude:0.####}");
         }
@@ -655,7 +672,8 @@ internal sealed class WeatherRuntime : MonoBehaviour
 
 internal sealed class WeatherConfig
 {
-    internal ConfigEntry<bool> Enabled { get; }
+    internal ConfigEntry<bool> SyncWeather { get; }
+    internal ConfigEntry<bool> SyncDayNight { get; }
     internal ConfigEntry<bool> AutoIpLocation { get; }
     internal ConfigEntry<string> ManualLocation { get; }
     internal ConfigEntry<int> RefreshMinutes { get; }
@@ -666,13 +684,23 @@ internal sealed class WeatherConfig
 
     internal WeatherConfig(ConfigFile config)
     {
-        Enabled = config.Bind("General", "Enabled", true, "启用实时天气同步。");
-        AutoIpLocation = config.Bind("Location", "AutoIpLocation", false, "使用 IP 自动定位。启用后会访问外部定位/天气 API。");
+        SyncWeather = config.Bind("General", "SyncWeather", true, "启用真实天气。如果关闭，天气将保持晴天。");
+        SyncDayNight = config.Bind("General", "SyncDayNight", true, "启用真实日夜。如果关闭，时间将保持白天。");
+
+        // Migrate old Enabled setting if it exists and was explicitly set to false
+        var oldEnabledEntry = config.Bind("General", "Enabled", true, "启用实时天气同步（已废弃，由 SyncWeather 代替）。");
+        if (!oldEnabledEntry.Value)
+        {
+            SyncWeather.Value = false;
+            oldEnabledEntry.Value = true; // reset so we don't migrate again
+        }
+
+        AutoIpLocation = config.Bind("Location", "AutoIpLocation", true, "使用 IP 自动定位。启用后会访问外部定位/天气 API。");
         ManualLocation = config.Bind("Location", "ManualLocation", "beijing", "关闭自动定位时用于公共地理编码 API 的城市名、拼音或经纬度，格式可为 39.9,116.4。");
         RefreshMinutes = config.Bind("Weather", "RefreshMinutes", 30, new ConfigDescription("天气刷新间隔（分钟）。", new AcceptableValueRange<int>(1, 180)));
         TimeoutSeconds = config.Bind("Weather", "TimeoutSeconds", 5, new ConfigDescription("网络请求超时（秒）。", new AcceptableValueRange<int>(2, 15)));
         IntensityScale = config.Bind("Effects", "IntensityScale", 1f, new ConfigDescription("fallback 天气效果强度倍率。", new AcceptableValueRange<float>(0f, 2f)));
-        InjectNativeDateTimeUI = config.Bind("Native", "InjectNativeDateTimeUI", true, "把天气信息追加到游戏现有日期/时间 UI。参考 RealTimeWeatherMod 的 UI 注入方式。");
+        InjectNativeDateTimeUI = config.Bind("Native", "InjectNativeDateTimeUI", true, "把天气信息追加到游戏现有日期/时间 UI。");
         UseNativeWindowWeather = config.Bind("Native", "UseNativeWindowWeather", true, "尝试调用游戏原生 WindowViewService.ChangeWeatherAndTime 切换窗口天气/时间。");
     }
 }
@@ -849,6 +877,54 @@ internal sealed class WeatherSnapshot
             ? SolarPhaseClassifier.Classify(localTime, sunriseTime.Value, sunsetTime.Value)
             : SolarPhaseClassifier.ClassifyBySunElevation(latitude, longitude, DateTime.UtcNow);
     }
+
+    internal WeatherSnapshot(string location, string text, int code, int temperatureCelsius, double latitude, double longitude, DateTime localTime, DateTime? sunriseTime, DateTime? sunsetTime, WeatherKind kind, SolarPhase solarPhase)
+    {
+        Location = location;
+        Text = text;
+        Code = code;
+        TemperatureCelsius = temperatureCelsius;
+        Latitude = latitude;
+        Longitude = longitude;
+        LocalTime = localTime;
+        SunriseTime = sunriseTime;
+        SunsetTime = sunsetTime;
+        Kind = kind;
+        SolarPhase = solarPhase;
+    }
+
+    internal WeatherSnapshot OverrideConfig(WeatherConfig config)
+    {
+        var kind = Kind;
+        var code = Code;
+        var text = Text;
+        if (!config.SyncWeather.Value)
+        {
+            kind = WeatherKind.Clear;
+            code = 0;
+            text = WeatherLocalizer.WeatherText(0, GameLanguage.English);
+        }
+
+        var solarPhase = SolarPhase;
+        if (!config.SyncDayNight.Value)
+        {
+            solarPhase = SolarPhase.Day;
+        }
+
+        return new WeatherSnapshot(
+            Location,
+            text,
+            code,
+            TemperatureCelsius,
+            Latitude,
+            Longitude,
+            LocalTime,
+            SunriseTime,
+            SunsetTime,
+            kind,
+            solarPhase
+        );
+    }
 }
 
 internal enum SolarPhase
@@ -944,7 +1020,7 @@ internal static class GameLanguageProvider
                 CurrentDateAndTimeUiPatch.RefreshAll();
                 SettingUiInjector.RefreshSettingLabels();
                 
-                if (RealTimeWeatherPlugin.Instance != null)
+                if (!ReferenceEquals(RealTimeWeatherPlugin.Instance, null))
                 {
                     RealTimeWeatherPlugin.Instance.RefreshLocalizedWeatherString();
                 }
@@ -1028,27 +1104,27 @@ internal static class WeatherLocalizer
     {
         return language switch
         {
-            GameLanguage.ChineseSimplified => "启用实时天气",
-            GameLanguage.ChineseTraditional => "啟用即時天氣",
-            GameLanguage.Japanese => "リアルタイム天気同期",
-            GameLanguage.Korean => "실시간 날씨 동기화",
+            GameLanguage.ChineseSimplified => "真实天气",
+            GameLanguage.ChineseTraditional => "真實天氣",
+            GameLanguage.Japanese => "リアルタイム天気",
+            GameLanguage.Korean => "실시간 날씨",
             GameLanguage.Portuguese => "Tempo em Tempo Real",
             GameLanguage.Russian => "Реальная погода",
             _ => "Real-time Weather"
         };
     }
 
-    internal static string GetAutoLocText(GameLanguage language)
+    internal static string GetSyncDayNightText(GameLanguage language)
     {
         return language switch
         {
-            GameLanguage.ChineseSimplified => "自动 IP 定位",
-            GameLanguage.ChineseTraditional => "自動 IP 定位",
-            GameLanguage.Japanese => "自動IP取得",
-            GameLanguage.Korean => "자동 IP 위치",
-            GameLanguage.Portuguese => "Localização por IP",
-            GameLanguage.Russian => "Автоопределение IP",
-            _ => "Auto IP Location"
+            GameLanguage.ChineseSimplified => "真实日夜",
+            GameLanguage.ChineseTraditional => "真實日夜",
+            GameLanguage.Japanese => "リアルタイム日夜",
+            GameLanguage.Korean => "실시간 낮과 밤",
+            GameLanguage.Portuguese => "Ciclo Dia/Noite Real",
+            GameLanguage.Russian => "Реальное время суток",
+            _ => "Real-time Day/Night"
         };
     }
 
@@ -1404,10 +1480,8 @@ internal static class PublicApiParser
 internal sealed class NativeGameBridge
 {
     private readonly WeatherConfig config;
-    private bool loggedMissingService;
-    private object? windowViewService;
-    private MethodInfo? changeWeatherAndTimeMethod;
     private float nextScanTime;
+    private static readonly Dictionary<string, MonoBehaviour> controllers = new();
     private string? lastAppliedEnvironmentKey;
 
     internal NativeGameBridge(WeatherConfig config)
@@ -1418,363 +1492,223 @@ internal sealed class NativeGameBridge
     internal void ForceScan()
     {
         nextScanTime = 0f;
-        ScanNativeObjects();
+        ScanControllers();
+    }
+
+    internal void ResetAppliedState()
+    {
+        lastAppliedEnvironmentKey = null;
     }
 
     internal void Tick(WeatherSnapshot? weather)
     {
         if (Time.unscaledTime >= nextScanTime)
         {
-            ScanNativeObjects();
+            nextScanTime = Time.unscaledTime + 10f;
+            ScanControllers();
         }
 
+        if (weather != null)
+        {
+            ApplyWeather(weather);
+        }
+        else
+        {
+            ApplyFallbackDayNight();
+        }
     }
 
-    internal void CaptureWindowViewService(object service)
+    private void ApplyFallbackDayNight()
     {
-        var method = service.GetType().GetMethod("ChangeWeatherAndTime", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (method == null)
+        if (!config.SyncDayNight.Value)
         {
+            ApplyNativeState(SolarPhase.Day, WeatherKind.Clear);
             return;
         }
 
-        windowViewService = service;
-        changeWeatherAndTimeMethod = method;
-        RealTimeWeatherPlugin.Log.LogInfo("已通过 FacilityEnvironment.Setup 捕获原生 WindowViewService.ChangeWeatherAndTime。");
+        var hour = DateTime.Now.Hour;
+        SolarPhase phase = SolarPhase.Day;
+        if (hour is >= 18 and < 19)
+        {
+            phase = SolarPhase.Sunset;
+        }
+        else if (hour is >= 19 or < 6)
+        {
+            phase = SolarPhase.Night;
+        }
+
+        ApplyNativeState(phase, WeatherKind.Clear);
     }
 
     internal void ApplyWeather(WeatherSnapshot weather)
     {
-        var environmentKey = $"{weather.Kind}:{weather.SolarPhase}";
-        if (!config.UseNativeWindowWeather.Value || lastAppliedEnvironmentKey == environmentKey)
-        {
-            return;
-        }
+        SolarPhase targetPhase = config.SyncDayNight.Value ? weather.SolarPhase : SolarPhase.Day;
+        WeatherKind targetKind = config.SyncWeather.Value ? weather.Kind : WeatherKind.Clear;
 
-        ScanNativeObjects();
-        if (windowViewService == null || changeWeatherAndTimeMethod == null)
-        {
-            RealTimeWeatherPlugin.Log.LogInfo("未找到 WindowViewService.ChangeWeatherAndTime，暂时使用 fallback 效果。");
-            return;
-        }
-
-        foreach (var candidate in GetWindowViewCandidates(weather))
-        {
-            try
-            {
-                changeWeatherAndTimeMethod.Invoke(windowViewService, new object[] { candidate });
-                lastAppliedEnvironmentKey = environmentKey;
-                RealTimeWeatherPlugin.Log.LogInfo($"已调用原生 ChangeWeatherAndTime：{candidate} ({WeatherLocalizer.WeatherText(weather.Code, RealTimeWeatherPlugin.CurrentLanguage)}, {weather.SolarPhase})");
-                return;
-            }
-            catch (TargetInvocationException ex)
-            {
-                RealTimeWeatherPlugin.Log.LogDebug($"ChangeWeatherAndTime 候选 {candidate} 调用失败：{ex.InnerException?.Message ?? ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                RealTimeWeatherPlugin.Log.LogDebug($"ChangeWeatherAndTime 候选 {candidate} 调用失败：{ex.Message}");
-            }
-        }
-
-        RealTimeWeatherPlugin.Log.LogInfo($"未能把 {environmentKey} 映射到原生 WindowViewType，继续使用 fallback 效果。");
+        ApplyNativeState(targetPhase, targetKind);
     }
 
-    private void ScanNativeObjects()
+    private void ApplyNativeState(SolarPhase phase, WeatherKind weather)
     {
-        nextScanTime = Time.unscaledTime + 10f;
-        ScanWindowViewService();
-
-        if (!loggedMissingService && windowViewService == null)
+        var environmentKey = $"{phase}:{weather}";
+        if (lastAppliedEnvironmentKey == environmentKey)
         {
-            loggedMissingService = true;
-            RealTimeWeatherPlugin.Log.LogInfo("尚未在当前场景找到 Bulbul.WindowViewService，会继续扫描。");
+            return;
+        }
+
+        ScanControllers();
+
+        string baseTarget = phase.ToString();
+        bool isBadWeather = weather is WeatherKind.Rain or WeatherKind.Storm or WeatherKind.Snow or WeatherKind.Fog or WeatherKind.Cloudy;
+
+        if (isBadWeather && phase != SolarPhase.Night)
+        {
+            baseTarget = "Cloudy";
+        }
+
+        ChangeBaseEnvironment(baseTarget);
+
+        bool targetLightRain = weather == WeatherKind.Rain;
+        bool targetHeavyRain = false;
+        bool targetThunderRain = weather == WeatherKind.Storm;
+        bool targetSnow = weather == WeatherKind.Snow;
+
+        SetEnvironmentState("LightRain", targetLightRain);
+        SetEnvironmentState("HeavyRain", targetHeavyRain);
+        SetEnvironmentState("ThunderRain", targetThunderRain);
+        SetEnvironmentState("Snow", targetSnow);
+
+        lastAppliedEnvironmentKey = environmentKey;
+        RealTimeWeatherPlugin.Log.LogInfo($"[NativeGameBridge] Applied native state - Phase: {phase}, Weather: {weather} (Base: {baseTarget}, LightRain: {targetLightRain}, ThunderRain: {targetThunderRain}, Snow: {targetSnow})");
+    }
+
+    private static MonoBehaviour? FindEnvironmentUi()
+    {
+        var uiType = AccessTools.TypeByName("Bulbul.EnvironmentUI");
+        if (uiType == null) return null;
+
+        foreach (var obj in Resources.FindObjectsOfTypeAll(uiType))
+        {
+            if (obj is MonoBehaviour mono && mono.gameObject.scene.rootCount != 0)
+            {
+                return mono;
+            }
+        }
+        return null;
+    }
+
+    private static void ChangeBaseEnvironment(string targetEnvName)
+    {
+        var ui = FindEnvironmentUi();
+        if (ui == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var changeTimeMethod = ui.GetType().GetMethod("ChangeTime", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (changeTimeMethod != null)
+            {
+                var paramType = changeTimeMethod.GetParameters()[0].ParameterType;
+                object enumVal = Enum.Parse(paramType, targetEnvName);
+                changeTimeMethod.Invoke(ui, new object[] { enumVal });
+            }
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogWarning($"[NativeGameBridge] ChangeBaseEnvironment to {targetEnvName} failed: {ex.Message}");
         }
     }
 
-    private void ScanWindowViewService()
+    private static void ScanControllers()
     {
-        if (windowViewService != null && changeWeatherAndTimeMethod != null)
+        var controllerType = AccessTools.TypeByName("Bulbul.EnvironmentController");
+        if (controllerType == null) return;
+
+        var keys = new List<string>(controllers.Keys);
+        foreach (var key in keys)
         {
-            return;
+            if (controllers[key] == null)
+            {
+                controllers.Remove(key);
+            }
         }
 
         foreach (var component in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
         {
-            if (component == null)
+            if (component == null || component.gameObject.scene.rootCount == 0 || !controllerType.IsInstanceOfType(component))
             {
                 continue;
             }
 
-            var type = component.GetType();
-            if (type.FullName != "Bulbul.WindowViewService")
+            try
             {
-                continue;
-            }
-
-            var method = type.GetMethod("ChangeWeatherAndTime", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (method == null)
-            {
-                continue;
-            }
-
-            windowViewService = component;
-            changeWeatherAndTimeMethod = method;
-            RealTimeWeatherPlugin.Log.LogInfo("已绑定原生 Bulbul.WindowViewService.ChangeWeatherAndTime。");
-            return;
-        }
-    }
-
-    private IEnumerable<object> GetWindowViewCandidates(WeatherSnapshot weather)
-    {
-        var enumType = AppDomain.CurrentDomain.GetAssemblies()
-            .Select(assembly => assembly.GetType("Bulbul.WindowViewType", false))
-            .FirstOrDefault(type => type != null);
-        if (enumType == null || !enumType.IsEnum)
-        {
-            yield break;
-        }
-
-        var keywords = GetEnvironmentKeywords(weather).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var names = Enum.GetNames(enumType);
-        foreach (var keyword in keywords)
-        {
-            foreach (var name in names.Where(name => name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0))
-            {
-                yield return Enum.Parse(enumType, name);
-            }
-        }
-    }
-
-    private static IEnumerable<string> GetEnvironmentKeywords(WeatherSnapshot weather)
-    {
-        if (weather.SolarPhase == SolarPhase.Sunset)
-        {
-            yield return "Sunset";
-            yield return "Evening";
-            yield return "Dusk";
-        }
-        else if (weather.SolarPhase == SolarPhase.Night)
-        {
-            yield return "Night";
-        }
-
-        foreach (var keyword in GetWeatherKeywords(weather.Kind))
-        {
-            yield return keyword;
-        }
-
-        if (weather.SolarPhase == SolarPhase.Day)
-        {
-            yield return "Day";
-            yield return "Sun";
-            yield return "Sunny";
-            yield return "Morning";
-        }
-        else if (weather.SolarPhase == SolarPhase.Sunset)
-        {
-            yield return "Day";
-            yield return "Night";
-        }
-        else
-        {
-            yield return "Day";
-        }
-    }
-
-    private static IEnumerable<string> GetWeatherKeywords(WeatherKind kind)
-    {
-        return kind switch
-        {
-            WeatherKind.Clear => new[] { "Sun", "Sunny" },
-            WeatherKind.Cloudy => new[] { "Cloud", "Cloudy" },
-            WeatherKind.Rain => new[] { "Rain", "Rainy" },
-            WeatherKind.Snow => new[] { "Snow", "Snowy" },
-            WeatherKind.Fog => new[] { "Fog", "Cloud" },
-            WeatherKind.Storm => new[] { "Storm", "Thunder", "Rain" },
-            _ => new[] { "Day", "Night" }
-        };
-    }
-
-    private static string StripWeatherSuffix(string value)
-    {
-        var pipeIndex = value.IndexOf(" | ", StringComparison.Ordinal);
-        if (pipeIndex >= 0)
-        {
-            return value.Substring(0, pipeIndex);
-        }
-
-        var lineIndex = value.IndexOf("\n", StringComparison.Ordinal);
-        return lineIndex >= 0 ? value.Substring(0, lineIndex) : value;
-    }
-
-    private static bool IsSceneObject(GameObject gameObject)
-    {
-        return gameObject.scene.IsValid() && gameObject.hideFlags == HideFlags.None;
-    }
-
-    private static string GetPath(Transform transform)
-    {
-        var parts = new Stack<string>();
-        var current = transform;
-        while (current != null)
-        {
-            parts.Push(current.name);
-            current = current.parent;
-        }
-
-        return string.Join("/", parts.ToArray());
-    }
-}
-
-internal sealed class WeatherApplier
-{
-    private readonly WeatherConfig config;
-    private readonly List<ParticleSystem> rainParticles = new();
-    private readonly List<ParticleSystem> snowParticles = new();
-    private readonly List<AudioSource> rainAudioSources = new();
-    private readonly List<Light> lights = new();
-    private float nextRebindTime;
-
-    internal WeatherApplier(WeatherConfig config)
-    {
-        this.config = config;
-    }
-
-    internal void Apply(WeatherSnapshot? weather)
-    {
-        if (Time.unscaledTime >= nextRebindTime)
-        {
-            RebindSceneObjects();
-        }
-
-        if (weather == null || !config.Enabled.Value)
-        {
-            return;
-        }
-
-        var rain = weather.Kind is WeatherKind.Rain or WeatherKind.Storm;
-        var snow = weather.Kind == WeatherKind.Snow;
-        SetParticles(rainParticles, rain, weather.Kind == WeatherKind.Storm ? 1.4f : 1f);
-        SetParticles(snowParticles, snow, 0.8f);
-        SetRainAudio(rain);
-        SetLights(weather.Kind);
-    }
-
-    internal void RebindSceneObjects()
-    {
-        nextRebindTime = Time.unscaledTime + 30f;
-        rainParticles.Clear();
-        snowParticles.Clear();
-        rainAudioSources.Clear();
-        lights.Clear();
-
-        foreach (var particle in Resources.FindObjectsOfTypeAll<ParticleSystem>())
-        {
-            if (!IsSceneObject(particle.gameObject))
-            {
-                continue;
-            }
-
-            var name = particle.gameObject.name.ToLowerInvariant();
-            if (name.Contains("rain") || name.Contains("雨"))
-            {
-                rainParticles.Add(particle);
-            }
-            else if (name.Contains("snow") || name.Contains("雪"))
-            {
-                snowParticles.Add(particle);
-            }
-        }
-
-        foreach (var source in Resources.FindObjectsOfTypeAll<AudioSource>())
-        {
-            if (!IsSceneObject(source.gameObject))
-            {
-                continue;
-            }
-
-            var name = source.gameObject.name.ToLowerInvariant();
-            if (name.Contains("rain") || name.Contains("雨"))
-            {
-                rainAudioSources.Add(source);
-            }
-        }
-
-        foreach (var light in Resources.FindObjectsOfTypeAll<Light>())
-        {
-            if (IsSceneObject(light.gameObject))
-            {
-                lights.Add(light);
-            }
-        }
-    }
-
-    private void SetParticles(IEnumerable<ParticleSystem> particles, bool active, float multiplier)
-    {
-        foreach (var particle in particles)
-        {
-            var emission = particle.emission;
-            emission.enabled = active;
-            emission.rateOverTimeMultiplier = Mathf.Max(0.01f, config.IntensityScale.Value * multiplier);
-
-            if (active && !particle.isPlaying)
-            {
-                particle.Play(true);
-            }
-            else if (!active && particle.isPlaying)
-            {
-                particle.Stop(true, ParticleSystemStopBehavior.StopEmitting);
-            }
-        }
-    }
-
-    private void SetRainAudio(bool active)
-    {
-        foreach (var source in rainAudioSources)
-        {
-            if (active)
-            {
-                source.volume = Mathf.Clamp01(config.IntensityScale.Value);
-                if (!source.isPlaying)
+                var envTypeProp = component.GetType().GetProperty("EnvironmentType", BindingFlags.Instance | BindingFlags.Public);
+                var envTypeVal = envTypeProp?.GetValue(component);
+                if (envTypeVal != null)
                 {
-                    source.Play();
+                    controllers[envTypeVal.ToString()] = component;
                 }
             }
-            else if (source.isPlaying)
-            {
-                source.Stop();
-            }
+            catch {}
         }
     }
 
-    private void SetLights(WeatherKind kind)
+    private static bool IsEnvironmentActive(string name)
     {
-        var target = kind switch
-        {
-            WeatherKind.Clear => 1f,
-            WeatherKind.Cloudy => 0.85f,
-            WeatherKind.Rain => 0.7f,
-            WeatherKind.Snow => 0.8f,
-            WeatherKind.Fog => 0.65f,
-            WeatherKind.Storm => 0.55f,
-            _ => 0.9f
-        };
+        var saveData = SaveDataManager.Instance;
+        if (saveData == null || saveData.EnviromentData == null) return false;
 
-        foreach (var light in lights)
+        if (Enum.TryParse<WindowViewType>(name, true, out var windowType))
         {
-            if (light.type is LightType.Directional or LightType.Spot)
+            if (saveData.EnviromentData.WindowViewDic != null &&
+                saveData.EnviromentData.WindowViewDic.TryGetValue(windowType, out var viewData))
             {
-                light.intensity = Mathf.Lerp(light.intensity, target, Time.deltaTime * 0.2f);
+                return viewData.IsActive;
             }
         }
+
+        if (Enum.TryParse<AmbientSoundType>(name, true, out var soundType))
+        {
+            if (saveData.EnviromentData.AmbientSoundDic != null &&
+                saveData.EnviromentData.AmbientSoundDic.TryGetValue(soundType, out var soundData))
+            {
+                return soundData.SoundVolume > 0f && !soundData.IsMuteAmbient;
+            }
+        }
+
+        return false;
     }
 
-    private static bool IsSceneObject(GameObject gameObject)
+    private static void SetEnvironmentState(string name, bool targetState)
     {
-        return gameObject.scene.IsValid() && gameObject.hideFlags == HideFlags.None;
+        if (!controllers.TryGetValue(name, out var ctrl) || ctrl == null)
+        {
+            return;
+        }
+
+        bool currentState = IsEnvironmentActive(name);
+        if (currentState == targetState)
+        {
+            return;
+        }
+
+        try
+        {
+            var method = ctrl.GetType().GetMethod("OnClickButtonMainIcon", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method != null)
+            {
+                method.Invoke(ctrl, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogWarning($"[NativeGameBridge] Failed to set environment state for {name}: {ex.Message}");
+        }
     }
 }
+
 
 [HarmonyPatch]
 internal static class SettingsMenuPatches

@@ -6,38 +6,7 @@ using UnityEngine;
 
 namespace RealTimeWeatherForChill;
 
-[HarmonyPatch]
-internal static class FacilityEnvironmentSetupPatch
-{
-    private static MethodBase? TargetMethod()
-    {
-        return AccessTools.TypeByName("Bulbul.FacilityEnvironment")
-            ?.GetMethod("Setup", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-    }
 
-    private static void Postfix(object __instance)
-    {
-        try
-        {
-            var field = __instance.GetType().GetField("_windowViewService", BindingFlags.Instance | BindingFlags.NonPublic);
-            var service = field?.GetValue(__instance);
-            if (service == null)
-            {
-                return;
-            }
-
-            var plugin = RealTimeWeatherPlugin.Instance;
-            if (!ReferenceEquals(plugin, null))
-            {
-                plugin.CaptureWindowViewService(service);
-            }
-        }
-        catch (Exception ex)
-        {
-            RealTimeWeatherPlugin.Log.LogWarning($"捕获 FacilityEnvironment WindowViewService 失败：{ex.Message}");
-        }
-    }
-}
 
 [HarmonyPatch]
 internal static class CurrentDateAndTimeUiPatch
@@ -96,7 +65,7 @@ internal static class CurrentDateAndTimeUiPatch
             var textProperty = textObject?.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
             if (textProperty?.GetValue(textObject) is string currentText && !currentText.Contains(weatherText))
             {
-                textProperty.SetValue(textObject, StripExistingWeather(currentText) + " | " + weatherText);
+                textProperty.SetValue(textObject, StripExistingWeather(currentText) + " | " + weatherText, null);
                 if (!loggedFirstInjection)
                 {
                     loggedFirstInjection = true;
@@ -190,6 +159,95 @@ internal static class SettingUiInjector
 
     internal static void Inject(object settingUi)
     {
+        try
+        {
+            var dumpType = AccessTools.TypeByName("Bulbul.InteractableUI");
+            if (dumpType != null)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"[InteractableUI Dump] FullName: {dumpType.FullName}");
+                sb.AppendLine("--- Fields ---");
+                foreach (var field in dumpType.GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    sb.AppendLine($" - {field.FieldType.Name} {field.Name}");
+                }
+                sb.AppendLine("--- Properties ---");
+                foreach (var prop in dumpType.GetProperties(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    sb.AppendLine($" - {prop.PropertyType.Name} {prop.Name} (Get={prop.GetMethod != null}, Set={prop.SetMethod != null})");
+                }
+                sb.AppendLine("--- Methods ---");
+                foreach (var method in dumpType.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    var pars = string.Join(", ", System.Linq.Enumerable.Select(method.GetParameters(), p => $"{p.ParameterType.Name} {p.Name}"));
+                    sb.AppendLine($" - {method.ReturnType.Name} {method.Name}({pars})");
+                }
+                RealTimeWeatherPlugin.Log.LogInfo(sb.ToString());
+            }
+            else
+            {
+                RealTimeWeatherPlugin.Log.LogWarning("[InteractableUI Dump] Bulbul.InteractableUI not found!");
+            }
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogWarning($"Dump Bulbul.InteractableUI failed: {ex.Message}");
+        }
+
+        try
+        {
+            var viewType = AccessTools.TypeByName("Bulbul.WindowViewType");
+            if (viewType != null && viewType.IsEnum)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("[WindowViewType Dump] Names:");
+                foreach (var name in Enum.GetNames(viewType))
+                {
+                    sb.AppendLine($" - {name}");
+                }
+                RealTimeWeatherPlugin.Log.LogInfo(sb.ToString());
+            }
+            else
+            {
+                RealTimeWeatherPlugin.Log.LogWarning("[WindowViewType Dump] Bulbul.WindowViewType not found!");
+            }
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogWarning($"Dump WindowViewType failed: {ex.Message}");
+        }
+
+        try
+        {
+            var uiType = AccessTools.TypeByName("Bulbul.SettingUI");
+            if (uiType != null)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"[SettingUI Dump] FullName: {uiType.FullName}");
+                sb.AppendLine("--- Fields ---");
+                foreach (var field in uiType.GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    sb.AppendLine($" - {field.FieldType.Name} {field.Name}");
+                }
+                sb.AppendLine("--- Properties ---");
+                foreach (var prop in uiType.GetProperties(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    sb.AppendLine($" - {prop.PropertyType.Name} {prop.Name} (Get={prop.GetMethod != null}, Set={prop.SetMethod != null})");
+                }
+                sb.AppendLine("--- Methods ---");
+                foreach (var method in uiType.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    var pars = string.Join(", ", System.Linq.Enumerable.Select(method.GetParameters(), p => $"{p.ParameterType.Name} {p.Name}"));
+                    sb.AppendLine($" - {method.ReturnType.Name} {method.Name}({pars})");
+                }
+                RealTimeWeatherPlugin.Log.LogInfo(sb.ToString());
+            }
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogWarning($"Dump SettingUI failed: {ex.Message}");
+        }
+
         var type = settingUi.GetType();
         var vsyncActField = type.GetField("_verticalSyncActivateInteractableUI", BindingFlags.Instance | BindingFlags.NonPublic);
         var vsyncDeactField = type.GetField("_verticalSyncDeactivateInteractableUI", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -240,13 +298,19 @@ internal static class SettingUiInjector
             RealTimeWeatherPlugin.Log.LogInfo("已成功定位常规设置的 ScrollView Content 容器。");
         }
 
-        // Check if already injected in this transform
-        var weatherRowTransform = contentTransform.Find("RealTimeWeather_EnableRow");
-        var autoLocRowTransform = contentTransform.Find("RealTimeWeather_AutoLocRow");
+        // Clean up legacy rows if they exist to prevent double injection
+        var legacyEnableRow = contentTransform.Find("RealTimeWeather_EnableRow");
+        if (legacyEnableRow != null) UnityEngine.Object.Destroy(legacyEnableRow.gameObject);
+        var legacyAutoLocRow = contentTransform.Find("RealTimeWeather_AutoLocRow");
+        if (legacyAutoLocRow != null) UnityEngine.Object.Destroy(legacyAutoLocRow.gameObject);
 
-        if (weatherRowTransform != null && autoLocRowTransform != null)
+        // Check if already injected in this transform under new names
+        var weatherRowTransform = contentTransform.Find("RealTimeWeather_SyncWeatherRow");
+        var dayNightRowTransform = contentTransform.Find("RealTimeWeather_SyncDayNightRow");
+
+        if (weatherRowTransform != null && dayNightRowTransform != null)
         {
-            UpdateInjectedRowVisuals(weatherRowTransform.gameObject, autoLocRowTransform.gameObject);
+            UpdateInjectedRowVisuals(weatherRowTransform.gameObject, dayNightRowTransform.gameObject);
             return;
         }
 
@@ -271,7 +335,7 @@ internal static class SettingUiInjector
 
         // 1. Clone Row for Enable Weather
         var weatherRow = UnityEngine.Object.Instantiate(rowTemplate, contentTransform);
-        weatherRow.name = "RealTimeWeather_EnableRow";
+        weatherRow.name = "RealTimeWeather_SyncWeatherRow";
         weatherRow.SetActive(true);
 
         string labelText = WeatherLocalizer.GetEnableWeatherText(RealTimeWeatherPlugin.CurrentLanguage);
@@ -283,7 +347,7 @@ internal static class SettingUiInjector
 
         if (btnOn == null || btnOff == null)
         {
-            RealTimeWeatherPlugin.Log.LogWarning("通过递归名称未找到克隆的‘启用实时天气’按钮，回退至 GetComponentsInChildren。");
+            RealTimeWeatherPlugin.Log.LogWarning("通过递归名称未找到克隆的'真实天气'按钮，回退至 GetComponentsInChildren。");
             var enableButtons = weatherRow.GetComponentsInChildren(interactableUiType, true);
             if (enableButtons != null && enableButtons.Length >= 2)
             {
@@ -294,43 +358,42 @@ internal static class SettingUiInjector
 
         if (btnOn != null && btnOff != null)
         {
-            SetRowLabel(weatherRow, labelText, btnOn, btnOff);
-
-            var setupMethod = interactableUiType.GetMethod("Setup", new Type[] { typeof(Action) });
-
-            Action onAct = () =>
+            // Define actions first so SetupInteractable can wire EventTrigger
+            Action weatherOnAct = () =>
             {
-                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单启用了实时天气");
-                var config = RealTimeWeatherPlugin.Instance?.Config;
-                if (config != null)
+                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单启用了真实天气");
+                var p = RealTimeWeatherPlugin.Instance;
+                if (!ReferenceEquals(p, null) && p.WeatherConfig != null)
                 {
-                    config.Bind("General", "Enabled", true).Value = true;
-                    config.Save();
+                    p.WeatherConfig.SyncWeather.Value = true;
+                    p.Config.Save();
                 }
                 SetIsUsing(btnOn, true);
                 SetIsUsing(btnOff, false);
-                RealTimeWeatherPlugin.Instance?.TriggerRefreshFromGameReady();
+                RealTimeWeatherPlugin.Instance?.ReapplyCurrentWeather();
             };
 
-            Action onDeact = () =>
+            Action weatherOffAct = () =>
             {
-                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单关闭了实时天气");
-                var config = RealTimeWeatherPlugin.Instance?.Config;
-                if (config != null)
+                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单关闭了真实天气");
+                var p = RealTimeWeatherPlugin.Instance;
+                if (!ReferenceEquals(p, null) && p.WeatherConfig != null)
                 {
-                    config.Bind("General", "Enabled", true).Value = false;
-                    config.Save();
+                    p.WeatherConfig.SyncWeather.Value = false;
+                    p.Config.Save();
                 }
                 SetIsUsing(btnOn, false);
                 SetIsUsing(btnOff, true);
+                RealTimeWeatherPlugin.Instance?.ReapplyCurrentWeather();
                 CurrentDateAndTimeUiPatch.RefreshAll();
             };
 
-            setupMethod?.Invoke(btnOn, new object[] { onAct });
-            setupMethod?.Invoke(btnOff, new object[] { onDeact });
+            SetupInteractable(btnOn, weatherOnAct);
+            SetupInteractable(btnOff, weatherOffAct);
+            SetRowLabel(weatherRow, labelText, btnOn, btnOff);
 
-            var config = RealTimeWeatherPlugin.Instance?.Config;
-            bool isEnabled = config != null && config.Bind("General", "Enabled", true).Value;
+            var plugin = RealTimeWeatherPlugin.Instance;
+            bool isEnabled = !ReferenceEquals(plugin, null) && plugin.WeatherConfig != null && plugin.WeatherConfig.SyncWeather.Value;
             SetIsUsing(btnOn, isEnabled);
             SetIsUsing(btnOff, !isEnabled);
         }
@@ -339,91 +402,89 @@ internal static class SettingUiInjector
             SetText(weatherRow, labelText);
         }
 
-        // 2. Clone Row for Auto IP Location
-        var autoLocRow = UnityEngine.Object.Instantiate(rowTemplate, contentTransform);
-        autoLocRow.name = "RealTimeWeather_AutoLocRow";
-        autoLocRow.SetActive(true);
+        // 2. Clone Row for Real-time Day/Night
+        var dayNightRow = UnityEngine.Object.Instantiate(rowTemplate, contentTransform);
+        dayNightRow.name = "RealTimeWeather_SyncDayNightRow";
+        dayNightRow.SetActive(true);
 
-        string autoLocLabel = WeatherLocalizer.GetAutoLocText(RealTimeWeatherPlugin.CurrentLanguage);
+        string dayNightLabel = WeatherLocalizer.GetSyncDayNightText(RealTimeWeatherPlugin.CurrentLanguage);
 
-        Component? autoLocBtnOn = FindChildRecursive(autoLocRow.transform, btnOnName)?.GetComponent(interactableUiType);
-        Component? autoLocBtnOff = FindChildRecursive(autoLocRow.transform, btnOffName)?.GetComponent(interactableUiType);
+        Component? dayNightBtnOn = FindChildRecursive(dayNightRow.transform, btnOnName)?.GetComponent(interactableUiType);
+        Component? dayNightBtnOff = FindChildRecursive(dayNightRow.transform, btnOffName)?.GetComponent(interactableUiType);
 
-        if (autoLocBtnOn == null || autoLocBtnOff == null)
+        if (dayNightBtnOn == null || dayNightBtnOff == null)
         {
-            RealTimeWeatherPlugin.Log.LogWarning("通过递归名称未找到克隆的‘自动 IP 定位’按钮，回退至 GetComponentsInChildren。");
-            var autoLocButtons = autoLocRow.GetComponentsInChildren(interactableUiType, true);
-            if (autoLocButtons != null && autoLocButtons.Length >= 2)
+            RealTimeWeatherPlugin.Log.LogWarning("通过递归名称未找到克隆的‘真实日夜’按钮，回退至 GetComponentsInChildren。");
+            var dayNightButtons = dayNightRow.GetComponentsInChildren(interactableUiType, true);
+            if (dayNightButtons != null && dayNightButtons.Length >= 2)
             {
-                autoLocBtnOn = autoLocButtons[0];
-                autoLocBtnOff = autoLocButtons[1];
+                dayNightBtnOn = dayNightButtons[0];
+                dayNightBtnOff = dayNightButtons[1];
             }
         }
 
-        if (autoLocBtnOn != null && autoLocBtnOff != null)
+        if (dayNightBtnOn != null && dayNightBtnOff != null)
         {
-            SetRowLabel(autoLocRow, autoLocLabel, autoLocBtnOn, autoLocBtnOff);
-
-            var setupMethod = interactableUiType.GetMethod("Setup", new Type[] { typeof(Action) });
-
-            Action onAct = () =>
+            // Define actions first so SetupInteractable can wire EventTrigger
+            Action dayNightOnAct = () =>
             {
-                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单启用了自动 IP 定位");
-                var config = RealTimeWeatherPlugin.Instance?.Config;
-                if (config != null)
+                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单启用了真实日夜");
+                var p = RealTimeWeatherPlugin.Instance;
+                if (!ReferenceEquals(p, null) && p.WeatherConfig != null)
                 {
-                    config.Bind("Location", "AutoIpLocation", false).Value = true;
-                    config.Save();
+                    p.WeatherConfig.SyncDayNight.Value = true;
+                    p.Config.Save();
                 }
-                SetIsUsing(autoLocBtnOn, true);
-                SetIsUsing(autoLocBtnOff, false);
-                RealTimeWeatherPlugin.Instance?.TriggerRefreshFromGameReady();
+                SetIsUsing(dayNightBtnOn, true);
+                SetIsUsing(dayNightBtnOff, false);
+                RealTimeWeatherPlugin.Instance?.ReapplyCurrentWeather();
             };
 
-            Action onDeact = () =>
+            Action dayNightOffAct = () =>
             {
-                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单关闭了自动 IP 定位");
-                var config = RealTimeWeatherPlugin.Instance?.Config;
-                if (config != null)
+                RealTimeWeatherPlugin.Log.LogInfo("用户在设置菜单关闭了真实日夜");
+                var p = RealTimeWeatherPlugin.Instance;
+                if (!ReferenceEquals(p, null) && p.WeatherConfig != null)
                 {
-                    config.Bind("Location", "AutoIpLocation", false).Value = false;
-                    config.Save();
+                    p.WeatherConfig.SyncDayNight.Value = false;
+                    p.Config.Save();
                 }
-                SetIsUsing(autoLocBtnOn, false);
-                SetIsUsing(autoLocBtnOff, true);
-                RealTimeWeatherPlugin.Instance?.TriggerRefreshFromGameReady();
+                SetIsUsing(dayNightBtnOn, false);
+                SetIsUsing(dayNightBtnOff, true);
+                RealTimeWeatherPlugin.Instance?.ReapplyCurrentWeather();
             };
 
-            setupMethod?.Invoke(autoLocBtnOn, new object[] { onAct });
-            setupMethod?.Invoke(autoLocBtnOff, new object[] { onDeact });
+            SetupInteractable(dayNightBtnOn, dayNightOnAct);
+            SetupInteractable(dayNightBtnOff, dayNightOffAct);
+            SetRowLabel(dayNightRow, dayNightLabel, dayNightBtnOn, dayNightBtnOff);
 
-            var config = RealTimeWeatherPlugin.Instance?.Config;
-            bool isAutoIp = config != null && config.Bind("Location", "AutoIpLocation", false).Value;
-            SetIsUsing(autoLocBtnOn, isAutoIp);
-            SetIsUsing(autoLocBtnOff, !isAutoIp);
+            var plugin = RealTimeWeatherPlugin.Instance;
+            bool isDayNight = !ReferenceEquals(plugin, null) && plugin.WeatherConfig != null && plugin.WeatherConfig.SyncDayNight.Value;
+            SetIsUsing(dayNightBtnOn, isDayNight);
+            SetIsUsing(dayNightBtnOff, !isDayNight);
         }
         else
         {
-            SetText(autoLocRow, autoLocLabel);
+            SetText(dayNightRow, dayNightLabel);
         }
 
         // Apply visual layout adjustments to position injected rows properly
         try
         {
-            PositionInjectedRows(weatherRow, autoLocRow, contentTransform);
+            PositionInjectedRows(weatherRow, dayNightRow, contentTransform);
         }
         catch (Exception ex)
         {
             RealTimeWeatherPlugin.Log.LogWarning($"调整注入行位置失败：{ex.Message}");
         }
 
-        RealTimeWeatherPlugin.Log.LogInfo("已成功在常规设置菜单内注入“启用实时天气”和“自动 IP 定位”两个原生选项。");
+        RealTimeWeatherPlugin.Log.LogInfo("已成功在常规设置菜单内注入“真实天气”和“真实日夜”两个原生选项。");
     }
 
-    private static void UpdateInjectedRowVisuals(GameObject weatherRow, GameObject autoLocRow)
+    private static void UpdateInjectedRowVisuals(GameObject weatherRow, GameObject dayNightRow)
     {
         string labelText = WeatherLocalizer.GetEnableWeatherText(RealTimeWeatherPlugin.CurrentLanguage);
-        string autoLocLabel = WeatherLocalizer.GetAutoLocText(RealTimeWeatherPlugin.CurrentLanguage);
+        string dayNightLabel = WeatherLocalizer.GetSyncDayNightText(RealTimeWeatherPlugin.CurrentLanguage);
 
         var interactableUiType = AccessTools.TypeByName("Bulbul.InteractableUI");
         
@@ -439,8 +500,8 @@ internal static class SettingUiInjector
         if (btnOn != null && btnOff != null)
         {
             SetRowLabel(weatherRow, labelText, btnOn, btnOff);
-            var config = RealTimeWeatherPlugin.Instance?.Config;
-            bool isEnabled = config != null && config.Bind("General", "Enabled", true).Value;
+            var plugin = RealTimeWeatherPlugin.Instance;
+            bool isEnabled = !ReferenceEquals(plugin, null) && plugin.WeatherConfig != null && plugin.WeatherConfig.SyncWeather.Value;
             SetIsUsing(btnOn, isEnabled);
             SetIsUsing(btnOff, !isEnabled);
         }
@@ -449,31 +510,31 @@ internal static class SettingUiInjector
             SetText(weatherRow, labelText);
         }
 
-        var autoLocButtons = autoLocRow.GetComponentsInChildren(interactableUiType, true);
-        Component? autoLocBtnOn = null;
-        Component? autoLocBtnOff = null;
-        if (autoLocButtons != null && autoLocButtons.Length >= 2)
+        var dayNightButtons = dayNightRow.GetComponentsInChildren(interactableUiType, true);
+        Component? dayNightBtnOn = null;
+        Component? dayNightBtnOff = null;
+        if (dayNightButtons != null && dayNightButtons.Length >= 2)
         {
-            autoLocBtnOn = autoLocButtons[0];
-            autoLocBtnOff = autoLocButtons[1];
+            dayNightBtnOn = dayNightButtons[0];
+            dayNightBtnOff = dayNightButtons[1];
         }
 
-        if (autoLocBtnOn != null && autoLocBtnOff != null)
+        if (dayNightBtnOn != null && dayNightBtnOff != null)
         {
-            SetRowLabel(autoLocRow, autoLocLabel, autoLocBtnOn, autoLocBtnOff);
-            var config = RealTimeWeatherPlugin.Instance?.Config;
-            bool isAutoIp = config != null && config.Bind("Location", "AutoIpLocation", false).Value;
-            SetIsUsing(autoLocBtnOn, isAutoIp);
-            SetIsUsing(autoLocBtnOff, !isAutoIp);
+            SetRowLabel(dayNightRow, dayNightLabel, dayNightBtnOn, dayNightBtnOff);
+            var plugin = RealTimeWeatherPlugin.Instance;
+            bool isDayNight = !ReferenceEquals(plugin, null) && plugin.WeatherConfig != null && plugin.WeatherConfig.SyncDayNight.Value;
+            SetIsUsing(dayNightBtnOn, isDayNight);
+            SetIsUsing(dayNightBtnOff, !isDayNight);
         }
         else
         {
-            SetText(autoLocRow, autoLocLabel);
+            SetText(dayNightRow, dayNightLabel);
         }
 
         // Apply Sibling Index Fix
         weatherRow.transform.SetAsFirstSibling();
-        autoLocRow.transform.SetAsFirstSibling();
+        dayNightRow.transform.SetAsFirstSibling();
 
         // Apply Mask Refresh Toggle Hack
         var rectMask = weatherRow.transform.parent?.parent?.GetComponent<UnityEngine.UI.RectMask2D>();
@@ -508,7 +569,7 @@ internal static class SettingUiInjector
             if (typeName == "UnityEngine.UI.Text" || typeName == "TMPro.TextMeshProUGUI")
             {
                 var prop = comp.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
-                prop?.SetValue(comp, text);
+                prop?.SetValue(comp, text, null);
             }
         }
     }
@@ -526,7 +587,7 @@ internal static class SettingUiInjector
                     continue;
                 }
                 var prop = comp.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
-                prop?.SetValue(comp, text);
+                prop?.SetValue(comp, text, null);
             }
         }
     }
@@ -556,14 +617,14 @@ internal static class SettingUiInjector
         }
     }
 
-    private static void PositionInjectedRows(GameObject weatherRow, GameObject autoLocRow, Transform contentTransform)
+    private static void PositionInjectedRows(GameObject weatherRow, GameObject dayNightRow, Transform contentTransform)
     {
         var children = new List<RectTransform>();
         for (int i = 0; i < contentTransform.childCount; i++)
         {
             var child = contentTransform.GetChild(i) as RectTransform;
             if (child != null && child.gameObject.activeSelf && 
-                child.gameObject != weatherRow && child.gameObject != autoLocRow)
+                child.gameObject != weatherRow && child.gameObject != dayNightRow)
             {
                 children.Add(child);
             }
@@ -623,19 +684,19 @@ internal static class SettingUiInjector
             }
 
             var weatherRect = weatherRow.GetComponent<RectTransform>();
-            var autoLocRect = autoLocRow.GetComponent<RectTransform>();
+            var dayNightRect = dayNightRow.GetComponent<RectTransform>();
 
-            if (weatherRect != null && autoLocRect != null)
+            if (weatherRect != null && dayNightRect != null)
             {
                 Vector2 posWeather = weatherRect.anchoredPosition;
                 posWeather.y = lowestRow.anchoredPosition.y + spacing;
                 posWeather.x = lowestRow.anchoredPosition.x;
                 weatherRect.anchoredPosition = posWeather;
 
-                Vector2 posAutoLoc = autoLocRect.anchoredPosition;
-                posAutoLoc.y = posWeather.y + spacing;
-                posAutoLoc.x = lowestRow.anchoredPosition.x;
-                autoLocRect.anchoredPosition = posAutoLoc;
+                Vector2 posDayNight = dayNightRect.anchoredPosition;
+                posDayNight.y = posWeather.y + spacing;
+                posDayNight.x = lowestRow.anchoredPosition.x;
+                dayNightRect.anchoredPosition = posDayNight;
 
                 var contentRect = contentTransform.GetComponent<RectTransform>();
                 if (contentRect != null)
@@ -648,7 +709,7 @@ internal static class SettingUiInjector
 
                 // Apply Sibling Index Fix
                 weatherRow.transform.SetAsFirstSibling();
-                autoLocRow.transform.SetAsFirstSibling();
+                dayNightRow.transform.SetAsFirstSibling();
 
                 // Apply Mask Refresh Toggle Hack
                 var rectMask = contentTransform.parent?.GetComponent<UnityEngine.UI.RectMask2D>();
@@ -666,19 +727,147 @@ internal static class SettingUiInjector
         try
         {
             var type = button.GetType();
-            var prop = type.GetProperty("IsUsing", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (prop != null)
+            var component = button as Component;
+
+            // Set the backing field directly
+            var backingField = type.GetField("<IsUsing>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (backingField != null)
             {
-                prop.SetValue(button, value);
+                backingField.SetValue(button, value);
             }
             else
             {
-                var method = type.GetMethod("set_IsUsing", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                method?.Invoke(button, new object[] { value });
+                var prop = type.GetProperty("IsUsing", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                prop?.SetValue(button, value, null);
+            }
+
+            // Directly manipulate Image alpha for visual feedback
+            // _usingImage: shown when "active/selected", _baseImage: shown when "inactive/default"
+            var usingImageField = type.GetField("_usingImage", BindingFlags.Instance | BindingFlags.NonPublic);
+            var baseImageField = type.GetField("_baseImage", BindingFlags.Instance | BindingFlags.NonPublic);
+            var usingAlphaField = type.GetField("_usingImageAlpha", BindingFlags.Instance | BindingFlags.NonPublic);
+            var baseAlphaField = type.GetField("_baseImageAlpha", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            float usingAlpha = 1f;
+            float baseAlpha = 1f;
+            if (usingAlphaField != null) usingAlpha = (float)usingAlphaField.GetValue(button);
+            if (baseAlphaField != null) baseAlpha = (float)baseAlphaField.GetValue(button);
+
+            if (usingImageField?.GetValue(button) is UnityEngine.UI.Image[] usingImages)
+            {
+                foreach (var img in usingImages)
+                {
+                    if (img != null)
+                    {
+                        var c = img.color;
+                        c.a = value ? usingAlpha : 0f;
+                        img.color = c;
+                    }
+                }
+            }
+
+            if (baseImageField?.GetValue(button) is UnityEngine.UI.Image[] baseImages)
+            {
+                foreach (var img in baseImages)
+                {
+                    if (img != null)
+                    {
+                        var c = img.color;
+                        c.a = value ? 0f : baseAlpha;
+                        img.color = c;
+                    }
+                }
+            }
+
+        }
+        catch (Exception ex)
+        {
+            RealTimeWeatherPlugin.Log.LogWarning($"SetIsUsing failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Completely bypasses the broken InteractableUI R3 event system for cloned buttons.
+    /// Instead, adds a Unity EventTrigger for direct click handling and sets _isFinishSetup=true.
+    /// </summary>
+    private static void SetupInteractable(Component btn, Action clickAction)
+    {
+        if (btn == null) return;
+        try
+        {
+            var interactableUiType = btn.GetType();
+            var go = btn.gameObject;
+
+            // 1. Mark setup as finished so any internal checks pass
+            var finishSetupField = interactableUiType.GetField("_isFinishSetup", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (finishSetupField != null)
+            {
+                finishSetupField.SetValue(btn, true);
+            }
+
+            // 2. Set _onInteractAction as a fallback (in case the native event chain works)
+            var interactField = interactableUiType.GetField("_onInteractAction", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (interactField != null)
+            {
+                interactField.SetValue(btn, clickAction);
+            }
+
+            // 3. Kill any stale tweens from the cloned template
+            var killTweensMethod = interactableUiType.GetMethod("KillAllTweens", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            killTweensMethod?.Invoke(btn, null);
+
+            // 4. Clear stale R3 disposable from clone
+            var disposableField = interactableUiType.GetField("_disposable", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (disposableField != null)
+            {
+                disposableField.SetValue(btn, null);
+            }
+
+            // 5. Add a direct Unity EventTrigger for PointerClick - this bypasses R3 entirely
+            var existingTrigger = go.GetComponent<UnityEngine.EventSystems.EventTrigger>();
+            if (existingTrigger != null)
+            {
+                UnityEngine.Object.Destroy(existingTrigger);
+            }
+
+            var trigger = go.AddComponent<UnityEngine.EventSystems.EventTrigger>();
+            var entry = new UnityEngine.EventSystems.EventTrigger.Entry();
+            entry.eventID = UnityEngine.EventSystems.EventTriggerType.PointerClick;
+            entry.callback.AddListener((_) =>
+            {
+                clickAction?.Invoke();
+            });
+            trigger.triggers.Add(entry);
+
+            // 6. Ensure the button has a raycast target (Image with raycastTarget=true)
+            var images = go.GetComponentsInChildren<UnityEngine.UI.Image>(true);
+            bool hasRaycastTarget = false;
+            foreach (var img in images)
+            {
+                if (img != null && img.raycastTarget)
+                {
+                    hasRaycastTarget = true;
+                    break;
+                }
+            }
+
+            if (!hasRaycastTarget && images.Length > 0)
+            {
+                images[0].raycastTarget = true;
+            }
+
+            // 7. Also add a Graphic (invisible) on the button GO itself if it doesn't have one
+            var graphic = go.GetComponent<UnityEngine.UI.Graphic>();
+            if (graphic == null)
+            {
+                var img = go.AddComponent<UnityEngine.UI.Image>();
+                img.color = new Color(0, 0, 0, 0); // Fully transparent
+                img.raycastTarget = true;
             }
         }
-        catch
+        catch (Exception ex)
         {
+            RealTimeWeatherPlugin.Log.LogWarning($"SetupInteractable failed for {btn.name}: {ex}");
         }
     }
 }
