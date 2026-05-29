@@ -537,7 +537,7 @@ internal static class SettingUiInjector
         dayNightRow.transform.SetAsFirstSibling();
 
         // Apply Mask Refresh Toggle Hack
-        var rectMask = weatherRow.transform.parent?.parent?.GetComponent<UnityEngine.UI.RectMask2D>();
+        var rectMask = weatherRow.transform.parent?.parent?.GetComponent("UnityEngine.UI.RectMask2D") as Behaviour;
         if (rectMask != null)
         {
             rectMask.enabled = false;
@@ -712,7 +712,7 @@ internal static class SettingUiInjector
                 dayNightRow.transform.SetAsFirstSibling();
 
                 // Apply Mask Refresh Toggle Hack
-                var rectMask = contentTransform.parent?.GetComponent<UnityEngine.UI.RectMask2D>();
+                var rectMask = contentTransform.parent?.GetComponent("UnityEngine.UI.RectMask2D") as Behaviour;
                 if (rectMask != null)
                 {
                     rectMask.enabled = false;
@@ -753,28 +753,36 @@ internal static class SettingUiInjector
             if (usingAlphaField != null) usingAlpha = (float)usingAlphaField.GetValue(button);
             if (baseAlphaField != null) baseAlpha = (float)baseAlphaField.GetValue(button);
 
-            if (usingImageField?.GetValue(button) is UnityEngine.UI.Image[] usingImages)
+            if (usingImageField?.GetValue(button) is Array usingImages)
             {
                 foreach (var img in usingImages)
                 {
                     if (img != null)
                     {
-                        var c = img.color;
-                        c.a = value ? usingAlpha : 0f;
-                        img.color = c;
+                        var colorProp = img.GetType().GetProperty("color");
+                        if (colorProp != null)
+                        {
+                            var c = (Color)colorProp.GetValue(img);
+                            c.a = value ? usingAlpha : 0f;
+                            colorProp.SetValue(img, c, null);
+                        }
                     }
                 }
             }
 
-            if (baseImageField?.GetValue(button) is UnityEngine.UI.Image[] baseImages)
+            if (baseImageField?.GetValue(button) is Array baseImages)
             {
                 foreach (var img in baseImages)
                 {
                     if (img != null)
                     {
-                        var c = img.color;
-                        c.a = value ? 0f : baseAlpha;
-                        img.color = c;
+                        var colorProp = img.GetType().GetProperty("color");
+                        if (colorProp != null)
+                        {
+                            var c = (Color)colorProp.GetValue(img);
+                            c.a = value ? 0f : baseAlpha;
+                            colorProp.SetValue(img, c, null);
+                        }
                     }
                 }
             }
@@ -823,46 +831,68 @@ internal static class SettingUiInjector
                 disposableField.SetValue(btn, null);
             }
 
-            // 5. Add a direct Unity EventTrigger for PointerClick - this bypasses R3 entirely
-            var existingTrigger = go.GetComponent<UnityEngine.EventSystems.EventTrigger>();
-            if (existingTrigger != null)
+            // 5. Add a direct Unity Button for Click handling - this bypasses R3 entirely
+            var btnType = AccessTools.TypeByName("UnityEngine.UI.Button");
+            if (btnType != null)
             {
-                UnityEngine.Object.Destroy(existingTrigger);
-            }
-
-            var trigger = go.AddComponent<UnityEngine.EventSystems.EventTrigger>();
-            var entry = new UnityEngine.EventSystems.EventTrigger.Entry();
-            entry.eventID = UnityEngine.EventSystems.EventTriggerType.PointerClick;
-            entry.callback.AddListener((_) =>
-            {
-                clickAction?.Invoke();
-            });
-            trigger.triggers.Add(entry);
-
-            // 6. Ensure the button has a raycast target (Image with raycastTarget=true)
-            var images = go.GetComponentsInChildren<UnityEngine.UI.Image>(true);
-            bool hasRaycastTarget = false;
-            foreach (var img in images)
-            {
-                if (img != null && img.raycastTarget)
+                var unityBtn = go.GetComponent(btnType);
+                if (unityBtn == null)
                 {
-                    hasRaycastTarget = true;
-                    break;
+                    unityBtn = go.AddComponent(btnType);
+                }
+
+                var onClickProp = btnType.GetProperty("onClick");
+                if (onClickProp != null)
+                {
+                    var onClick = onClickProp.GetValue(unityBtn);
+                    var addListenerMethod = onClick?.GetType().GetMethod("AddListener");
+                    if (addListenerMethod != null)
+                    {
+                        var action = new UnityEngine.Events.UnityAction(clickAction);
+                        addListenerMethod.Invoke(onClick, new object[] { action });
+                    }
                 }
             }
 
-            if (!hasRaycastTarget && images.Length > 0)
+            // 6. Ensure the button has a raycast target (Image with raycastTarget=true)
+            var imgType = AccessTools.TypeByName("UnityEngine.UI.Image");
+            if (imgType != null)
             {
-                images[0].raycastTarget = true;
+                var images = go.GetComponentsInChildren(imgType, true);
+                bool hasRaycastTarget = false;
+                foreach (var img in images)
+                {
+                    if (img != null)
+                    {
+                        var raycastProp = imgType.GetProperty("raycastTarget");
+                        if (raycastProp != null && (bool)raycastProp.GetValue(img))
+                        {
+                            hasRaycastTarget = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!hasRaycastTarget && images.Length > 0)
+                {
+                    var raycastProp = imgType.GetProperty("raycastTarget");
+                    raycastProp?.SetValue(images[0], true, null);
+                }
             }
 
             // 7. Also add a Graphic (invisible) on the button GO itself if it doesn't have one
-            var graphic = go.GetComponent<UnityEngine.UI.Graphic>();
-            if (graphic == null)
+            var graphicType = AccessTools.TypeByName("UnityEngine.UI.Graphic");
+            if (graphicType != null && imgType != null)
             {
-                var img = go.AddComponent<UnityEngine.UI.Image>();
-                img.color = new Color(0, 0, 0, 0); // Fully transparent
-                img.raycastTarget = true;
+                var graphic = go.GetComponent(graphicType);
+                if (graphic == null)
+                {
+                    var img = go.AddComponent(imgType);
+                    var colorProp = imgType.GetProperty("color");
+                    colorProp?.SetValue(img, new Color(0, 0, 0, 0), null); // Fully transparent
+                    var raycastProp = imgType.GetProperty("raycastTarget");
+                    raycastProp?.SetValue(img, true, null);
+                }
             }
         }
         catch (Exception ex)

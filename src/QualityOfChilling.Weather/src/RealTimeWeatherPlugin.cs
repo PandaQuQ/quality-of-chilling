@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -11,7 +11,7 @@ using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
-using Bulbul;
+
 
 namespace RealTimeWeatherForChill;
 
@@ -29,7 +29,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
 {
     private const string PluginGuid = "panda.chillwithyou.realtimeweather";
     private const string PluginName = "Real Time Weather for Chill With You";
-    private const string PluginVersion = "0.1.0";
+    private const string PluginVersion = "0.1.1";
 
     internal static RealTimeWeatherPlugin? Instance { get; private set; }
     internal static string CurrentUiWeatherString { get; private set; } = string.Empty;

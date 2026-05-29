@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using Bulbul;
 using HarmonyLib;
 using UnityEngine;
 
@@ -187,25 +186,69 @@ internal sealed class NativeGameBridge
 
     private static bool IsEnvironmentActive(string name)
     {
-        var saveData = SaveDataManager.Instance;
-        if (saveData == null || saveData.EnviromentData == null) return false;
-
-        if (Enum.TryParse<WindowViewType>(name, true, out var windowType))
+        try
         {
-            if (saveData.EnviromentData.WindowViewDic != null &&
-                saveData.EnviromentData.WindowViewDic.TryGetValue(windowType, out var viewData))
+            var saveDataMgrType = AccessTools.TypeByName("Bulbul.SaveDataManager");
+            if (saveDataMgrType == null) return false;
+
+            var instanceProp = saveDataMgrType.GetProperty("Instance", BindingFlags.Static | BindingFlags.Public);
+            var saveData = instanceProp?.GetValue(null);
+            if (saveData == null) return false;
+
+            var envDataProp = saveDataMgrType.GetProperty("EnviromentData", BindingFlags.Instance | BindingFlags.Public);
+            var envData = envDataProp?.GetValue(saveData);
+            if (envData == null) return false;
+
+            var envDataType = envData.GetType();
+
+            var windowViewType = AccessTools.TypeByName("Bulbul.WindowViewType");
+            if (windowViewType != null)
             {
-                return viewData.IsActive;
+                try
+                {
+                    object windowType = Enum.Parse(windowViewType, name, true);
+                    var windowDicProp = envDataType.GetProperty("WindowViewDic", BindingFlags.Instance | BindingFlags.Public);
+                    var windowDic = windowDicProp?.GetValue(envData) as System.Collections.IDictionary;
+                    if (windowDic != null && windowDic.Contains(windowType))
+                    {
+                        var viewData = windowDic[windowType];
+                        var isActiveProp = viewData.GetType().GetProperty("IsActive", BindingFlags.Instance | BindingFlags.Public);
+                        if (isActiveProp != null && isActiveProp.GetValue(viewData) is bool isActive)
+                        {
+                            return isActive;
+                        }
+                    }
+                }
+                catch {}
+            }
+
+            var ambientSoundType = AccessTools.TypeByName("Bulbul.AmbientSoundType");
+            if (ambientSoundType != null)
+            {
+                try
+                {
+                    object soundType = Enum.Parse(ambientSoundType, name, true);
+                    var soundDicProp = envDataType.GetProperty("AmbientSoundDic", BindingFlags.Instance | BindingFlags.Public);
+                    var soundDic = soundDicProp?.GetValue(envData) as System.Collections.IDictionary;
+                    if (soundDic != null && soundDic.Contains(soundType))
+                    {
+                        var soundData = soundDic[soundType];
+                        var soundVolProp = soundData.GetType().GetProperty("SoundVolume", BindingFlags.Instance | BindingFlags.Public);
+                        var isMuteProp = soundData.GetType().GetProperty("IsMuteAmbient", BindingFlags.Instance | BindingFlags.Public);
+                        if (soundVolProp != null && isMuteProp != null)
+                        {
+                            float vol = Convert.ToSingle(soundVolProp.GetValue(soundData));
+                            bool isMute = Convert.ToBoolean(isMuteProp.GetValue(soundData));
+                            return vol > 0f && !isMute;
+                        }
+                    }
+                }
+                catch {}
             }
         }
-
-        if (Enum.TryParse<AmbientSoundType>(name, true, out var soundType))
+        catch (Exception ex)
         {
-            if (saveData.EnviromentData.AmbientSoundDic != null &&
-                saveData.EnviromentData.AmbientSoundDic.TryGetValue(soundType, out var soundData))
-            {
-                return soundData.SoundVolume > 0f && !soundData.IsMuteAmbient;
-            }
+            RealTimeWeatherPlugin.Log.LogWarning($"[NativeGameBridge] IsEnvironmentActive reflection failed: {ex.Message}");
         }
 
         return false;
