@@ -53,11 +53,17 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
             {
                 return string.Empty;
             }
-            return $"{WeatherLocalizer.WeatherText(applied.Code, CurrentLanguage)} {applied.TemperatureCelsius}°C";
+            string loc = !string.IsNullOrEmpty(currentLocalizedLocation) ? currentLocalizedLocation + " " : string.Empty;
+            return $"{loc}{WeatherLocalizer.WeatherText(applied.Code, CurrentLanguage)} {applied.TemperatureCelsius}°C";
         }
     }
     private WeatherSnapshot? lastWeather;
     private WeatherRuntime? runtime;
+    private string? currentLocalizedLocation;
+    private UnityEngine.Coroutine? locationNameCoroutine;
+    private GameLanguage lastLocationLanguage = (GameLanguage)(-1);
+    private double lastLocationLat;
+    private double lastLocationLon;
     private string status = "未刷新";
     private bool fallbackRefreshStarted;
     private bool refreshInProgress;
@@ -143,9 +149,80 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
     {
         if (lastWeather != null)
         {
+            TryUpdateLocalizedLocation();
             var appliedWeather = lastWeather.OverrideConfig(weatherConfig);
             CurrentUiWeatherString = UiWeatherString;
-            status = $"{appliedWeather.Location} / {CurrentUiWeatherString}";
+            status = $"{currentLocalizedLocation ?? appliedWeather.Location} / {CurrentUiWeatherString}";
+        }
+    }
+
+    private void TryUpdateLocalizedLocation()
+    {
+        if (lastWeather == null) return;
+        
+        if (lastLocationLanguage == CurrentLanguage && 
+            Math.Abs(lastLocationLat - lastWeather.Latitude) < 0.001 &&
+            Math.Abs(lastLocationLon - lastWeather.Longitude) < 0.001 &&
+            currentLocalizedLocation != null)
+        {
+            return;
+        }
+
+        if (locationNameCoroutine != null)
+        {
+            runtime?.StopPluginCoroutine(locationNameCoroutine);
+        }
+        
+        lastLocationLanguage = CurrentLanguage;
+        lastLocationLat = lastWeather.Latitude;
+        lastLocationLon = lastWeather.Longitude;
+        locationNameCoroutine = runtime?.StartPluginCoroutine(FetchLocalizedLocation(lastWeather.Latitude, lastWeather.Longitude, CurrentLanguage));
+    }
+
+    private IEnumerator FetchLocalizedLocation(double lat, double lon, GameLanguage language)
+    {
+        string langCode = language switch
+        {
+            GameLanguage.Japanese => "ja",
+            GameLanguage.ChineseSimplified => "zh",
+            GameLanguage.ChineseTraditional => "zh",
+            GameLanguage.Korean => "ko",
+            GameLanguage.Portuguese => "pt",
+            GameLanguage.Russian => "ru",
+            _ => "en"
+        };
+        
+        var url = $"https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={lat.ToString(System.Globalization.CultureInfo.InvariantCulture)}&longitude={lon.ToString(System.Globalization.CultureInfo.InvariantCulture)}&localityLanguage={langCode}";
+        
+        using var request = UnityEngine.Networking.UnityWebRequest.Get(url);
+        request.timeout = 5;
+        yield return request.SendWebRequest();
+        
+        if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
+        {
+            try
+            {
+                var root = MiniJson.Deserialize(request.downloadHandler.text) as Dictionary<string, object>;
+                if (root != null)
+                {
+                    var city = root.GetString("city", "");
+                    var locality = root.GetString("locality", "");
+                    
+                    string loc = !string.IsNullOrEmpty(city) ? city : locality;
+                    if (!string.IsNullOrEmpty(loc))
+                    {
+                        currentLocalizedLocation = loc;
+                        CurrentUiWeatherString = UiWeatherString;
+                        if (lastWeather != null)
+                        {
+                            var appliedWeather = lastWeather.OverrideConfig(weatherConfig);
+                            status = $"{loc} / {CurrentUiWeatherString}";
+                        }
+                        CurrentDateAndTimeUiPatch.RefreshAll();
+                    }
+                }
+            }
+            catch { }
         }
     }
 
@@ -600,8 +677,7 @@ public sealed class RealTimeWeatherPlugin : BaseUnityPlugin
         if (result is { Weather: not null })
         {
             lastWeather = result.Weather;
-            CurrentUiWeatherString = UiWeatherString;
-            status = $"{lastWeather.Location} / {CurrentUiWeatherString}";
+            RefreshLocalizedWeatherString();
             
             if (result.RawJson != null && result.Point != null)
             {
@@ -645,9 +721,14 @@ internal sealed class WeatherRuntime : MonoBehaviour
         }
     }
 
-    internal void StartPluginCoroutine(IEnumerator routine)
+    internal Coroutine StartPluginCoroutine(IEnumerator routine)
     {
-        StartCoroutine(routine);
+        return StartCoroutine(routine);
+    }
+
+    internal void StopPluginCoroutine(Coroutine routine)
+    {
+        StopCoroutine(routine);
     }
 
     internal Coroutine RunNestedCoroutine(IEnumerator routine)
