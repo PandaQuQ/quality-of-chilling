@@ -82,3 +82,11 @@ The project uses GitHub Actions for CI/CD:
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## Troubleshooting & Notes
+
+**Why does my manually set city show a different name? (e.g., entering "Egham" displays "Addlestone")**  
+This mod utilizes a combination of Open-Meteo's Forward Geocoding API (to resolve coordinates) and BigDataCloud's Reverse Geocoding API (to fetch the localized, dynamic display name based on your current game language). 
+Free public Reverse Geocoding APIs often map coordinates to the **administrative center or primary locality** of that bounding box. For instance, the coordinates for Egham fall under the administrative borough of Runnymede, whose primary indexed town is Addlestone. Therefore, the API correctly returns Addlestone as the geographic identifier for that area. This is a normal limitation of free geographical APIs.
